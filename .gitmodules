@@ -1,3 +1,6 @@
+[submodule "submodules/diff-triangle-rasterization"]
+	path = submodules/diff-triangle-rasterization
+	url = https://github.com/akshaysm123/diff-triangle-rasterization.git
 [submodule "submodules/simple-knn"]
 	path = submodules/simple-knn
 	url = https://gitlab.inria.fr/bkerbl/simple-knn.git
