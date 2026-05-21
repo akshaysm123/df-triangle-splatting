@@ -32,12 +32,15 @@ from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
 from triangle_renderer import TriangleModel
 
-def render_set(model_path, name, iteration, views, triangles, pipeline, background):
+def render_set(model_path, name, iteration, views, triangles, pipeline, background, quick):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
+
+    if quick:
+        views = views[:10]
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         rendering = render(view, triangles, pipeline, background)["render"]
@@ -45,7 +48,7 @@ def render_set(model_path, name, iteration, views, triangles, pipeline, backgrou
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool):
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, quick : bool):
     with torch.no_grad():
         triangles = TriangleModel(dataset.sh_degree)
         scene = Scene(args=dataset,
@@ -62,10 +65,10 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), triangles, pipeline, background)
+             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), triangles, pipeline, background, quick)
 
         if not skip_test:
-             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), triangles, pipeline, background)
+             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), triangles, pipeline, background, quick)
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -76,6 +79,7 @@ if __name__ == "__main__":
     parser.add_argument("--skip_train", action="store_true")
     parser.add_argument("--skip_test", action="store_true")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--quick", action="store_true")
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
