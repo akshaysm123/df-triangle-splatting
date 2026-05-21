@@ -5,13 +5,20 @@
 #SBATCH --job-name=dftri_train
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=18
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --output=output/DFTRI_output%A.out
 
 source $HOME/miniconda3/start1260.sh
 conda activate triangle_splatting
 (
     cd $HOME/df-triangle-splatting
+
+    # rebuild
+    pushd submodules/diff-triangle-rasterization/ || exit 1
+    pip install --no-build-isolation --upgrade .
+    popd
+    echo "Finished building, starting training."
+
     SCENE="bicycle"
     python train.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE --iterations 5000
     python render.py -m output/m360/$SCENE --quick
