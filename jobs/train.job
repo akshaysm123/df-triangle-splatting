@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 #SBATCH --partition=gpu_a100
 #SBATCH --gpus=1
@@ -9,6 +8,7 @@ set -e
 #SBATCH --time=01:00:00
 #SBATCH --output=output/DFTRI_output%A.out
 
+set -e
 source $HOME/miniconda3/start1260.sh
 conda activate triangle_splatting
 (
@@ -18,7 +18,7 @@ conda activate triangle_splatting
     pushd submodules/diff-triangle-rasterization/
     pip install --no-build-isolation --upgrade .
     popd
-    echo "Finished building, starting training."
+    echo -e "\nFinished building, starting training.\n"
 
     SCENE="bicycle"
     python train.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE --iterations 5000
