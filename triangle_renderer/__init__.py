@@ -140,6 +140,9 @@ def render(viewpoint_camera, pc : TriangleModel, pipe, bg_color : torch.Tensor, 
     # get depth distortion map
     render_dist = allmap[6:7]
 
+    # per-triangle random hue render (same compositing as RGB image)
+    render_random_color = allmap[7:10]
+
     # psedo surface attributes
     # surf depth is either median or expected by setting depth_ratio to 1 or 0
     # for bounded scene, use median depth, i.e., depth_ratio = 1; 
@@ -157,6 +160,7 @@ def render(viewpoint_camera, pc : TriangleModel, pipe, bg_color : torch.Tensor, 
             'rend_alpha': render_alpha,
             'rend_normal': render_normal,
             'rend_dist': render_dist,
+            'rend_random_color': render_random_color,
             'surf_depth': surf_depth,
             'surf_normal': surf_normal,
     })
