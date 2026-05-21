@@ -6,12 +6,13 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=18
 #SBATCH --time=02:00:00
-#SBATCH --output=$HOME/output/DFTRI_output%A.out
+#SBATCH --output=output/DFTRI_output%A.out
 
 source $HOME/miniconda3/start1260.sh
 conda activate triangle_splatting
-cd $HOME/triangle-splatting
-
-SCENE="bicycle"
-python train.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE --iterations 5000
-python render.py -m output/m360/$SCENE --quick
+(
+    cd $HOME/df-triangle-splatting
+    SCENE="bicycle"
+    python train.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE --iterations 5000
+    python render.py -m output/m360/$SCENE --quick
+)
