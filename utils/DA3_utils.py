@@ -5,52 +5,39 @@ import cv2
 import numpy as np
 import torch
 
-_NPZ_ARRAY_KEYS = ("depth", "confidence", "data", "arr_0")
 
-
-def load_npz_float32(path: str) -> np.ndarray:
-    """Load a single float32 array from an .npz file."""
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"Expected map file not found: {path}")
-
-    with np.load(path) as data:
-        if len(data.files) == 1:
-            arr = data[data.files[0]]
-        else:
-            arr = None
-            for key in _NPZ_ARRAY_KEYS:
-                if key in data:
-                    arr = data[key]
-                    break
-            if arr is None:
-                raise KeyError(
-                    f"Could not find array in {path}. Keys: {list(data.files)}. "
-                    f"Expected one array or one of {_NPZ_ARRAY_KEYS}."
-                )
-
+def _as_2d_float32(arr: np.ndarray, key: str, path: str) -> np.ndarray:
     arr = np.asarray(arr, dtype=np.float32)
     if arr.ndim == 3 and arr.shape[-1] == 1:
         arr = arr[..., 0]
     if arr.ndim != 2:
-        raise ValueError(f"Expected 2D map in {path}, got shape {arr.shape}")
+        raise ValueError(f"Expected 2D '{key}' in {path}, got shape {arr.shape}")
     return arr
 
 
 def load_depth_confidence_maps(scene_path: str, image_stem: str):
     """
-    Load depth and confidence .npz maps for an image stem (no extension).
+    Load depth and confidence from a single .npz per image.
 
-    Layout: {scene_path}/depths/{stem}.npz and {scene_path}/confidence/{stem}.npz
-    Returns (depth, confidence) as float32 HxW arrays, or (None, None) if depths/ is absent.
+    Layout: {scene_path}/frame_data/{stem}.npz with arrays "depth" and "confidence".
+    Returns (depth, confidence) as float32 HxW arrays.
     """
-    depth_dir = os.path.join(scene_path, "depths")
-    if not os.path.isdir(depth_dir):
-        return None, None
+    maps_dir = os.path.join(scene_path, "frame_data")
+    if not os.path.isdir(maps_dir):
+        raise FileNotFoundError(f"Expected depth/confidence directory not found: {maps_dir}")
 
-    depth_path = os.path.join(depth_dir, f"{image_stem}.npz")
-    conf_path = os.path.join(scene_path, "confidence", f"{image_stem}.npz")
-    depth = load_npz_float32(depth_path)
-    confidence = load_npz_float32(conf_path)
+    path = os.path.join(maps_dir, f"{image_stem}.npz")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Expected depth/confidence file not found: {path}")
+
+    with np.load(path) as data:
+        if "depth" not in data or "confidence" not in data:
+            raise KeyError(
+                f"Expected 'depth' and 'confidence' in {path}, found keys: {list(data.files)}"
+            )
+        depth = _as_2d_float32(data["depth"], "depth", path)
+        confidence = _as_2d_float32(data["confidence"], "confidence", path)
+
     return depth, confidence
 
 

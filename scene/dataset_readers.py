@@ -79,7 +79,7 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, scene_path=None):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, scene_path):
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
@@ -112,9 +112,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, scene_path=
         image_name = os.path.basename(image_path).split(".")[0]
         image = Image.open(image_path)
 
-        depth, confidence = (None, None)
-        if scene_path is not None:
-            depth, confidence = load_depth_confidence_maps(scene_path, image_name)
+        depth, confidence = load_depth_confidence_maps(scene_path, image_name)
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                               image_path=image_path, image_name=image_name, width=width, height=height,
