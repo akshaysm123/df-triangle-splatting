@@ -25,6 +25,18 @@ Principal point defaults to image center: \(c_x = W/2\), \(c_y = H/2\).
 
 ---
 
+## Step 0: Depth Smoothing (optional, on by default)
+
+Before backprojection, depth is smoothed on CPU with OpenCV:
+
+```python
+cv2.bilateralFilter(depth, d=9, sigmaColor=0.1, sigmaSpace=5)
+```
+
+This reduces high-frequency noise in the depth map that would otherwise create spiky normal artifacts. Disable via `smooth_depth=False` in `depth_map_to_normals`.
+
+---
+
 ## Step 1: Backproject to Camera-Space Points
 
 For each pixel \((u, v)\) with depth \(d(u,v)\), the 3D point in **camera coordinates** is:
@@ -47,31 +59,31 @@ This yields an \(H \times W \times 3\) **structured point cloud**—one point pe
 
 ## Step 2: Tangent Vectors via Central Differences
 
-Because neighbors lie on a grid, tangents use **central differences** on interior pixels (\(u \in [1, W-2]\), \(v \in [1, H-2]\)):
+Because neighbors lie on a grid, tangents use **central differences** with radius \(r\) (default \(r = 2\)) on interior pixels:
 
 **Along \(u\) (horizontal):**
 
 \[
-\mathbf{t}_x(u,v) = \mathbf{P}(u+1, v) - \mathbf{P}(u-1, v)
+\mathbf{t}_x(u,v) = \mathbf{P}(u+r, v) - \mathbf{P}(u-r, v)
 \]
 
 **Along \(v\) (vertical):**
 
 \[
-\mathbf{t}_y(u,v) = \mathbf{P}(u, v+1) - \mathbf{P}(u, v-1)
+\mathbf{t}_y(u,v) = \mathbf{P}(u, v+r) - \mathbf{P}(u, v-r)
 \]
 
-In tensor layout `points[v, u, :]` (row = \(v\), col = \(u\)):
+Let `span = 2r`. In tensor layout `points[v, u, :]` (row = \(v\), col = \(u\)):
 
-- \(\mathbf{t}_x\) = `points[:, 2:, :] - points[:, :-2, :]` → shape \((H,\, W-2,\, 3)\)
-- \(\mathbf{t}_y\) = `points[2:, :, :] - points[:-2, :, :]` → shape \((H-2,\, W,\, 3)\)
+- \(\mathbf{t}_x\) = `points[:, span:, :] - points[:, :-span, :]` → shape \((H,\, W - 2r,\, 3)\)
+- \(\mathbf{t}_y\) = `points[span:, :, :] - points[:-span, :, :]` → shape \((H - 2r,\, W,\, 3)\)
 
-These shapes differ, so the cross product is taken only on the **interior overlap** where both tangents exist for the same \((u, v)\):
+Cross product on the **interior overlap** (both tangents defined at the same center \((u,v)\)):
 
-- `t_x_mid = t_x[1:-1, :, :]` → \((H-2,\, W-2,\, 3)\)
-- `t_y_mid = t_y[:, 1:-1, :]` → \((H-2,\, W-2,\, 3)\)
+- `t_x_mid = t_x[r:-r, :, :]` → \((H - 2r,\, W - 2r,\, 3)\)
+- `t_y_mid = t_y[:, r:-r, :]` → \((H - 2r,\, W - 2r,\, 3)\)
 
-That corresponds to \(u \in [1, W-2]\) and \(v \in [1, H-2]\).
+Valid centers: \(u \in [r,\, W-r-1]\), \(v \in [r,\, H-r-1]\). With \(r=2\), the **border is 2 pixels** wide (all `NaN`).
 
 ---
 
@@ -83,13 +95,11 @@ Unnormalized normal (interior pixels only):
 \mathbf{n}(u,v) = \mathbf{t}_x(u,v) \times \mathbf{t}_y(u,v)
 \]
 
-Unit normal:
+Let \(m = \|\mathbf{n}\|\). If \(m < \tau\) (default \(\tau = 10^{-4}\)), the pixel is set to **`NaN`** (degenerate / near-flat patch). Otherwise:
 
 \[
-\hat{\mathbf{n}}(u,v) = \frac{\mathbf{n}}{\|\mathbf{n}\| + \varepsilon}
+\hat{\mathbf{n}}(u,v) = \frac{\mathbf{n}}{m}
 \]
-
-(\(\varepsilon = 10^{-8}\) in code via `F.normalize`.)
 
 ---
 
@@ -117,9 +127,10 @@ The output map is initialized to **`NaN`**. Only interior pixels with valid cent
 
 | Region | Normal value | Reason |
 |--------|--------------|--------|
-| Border (1 px) | `NaN` | No full \(u \pm 1\) / \(v \pm 1\) neighborhood for central differences |
+| Border (\(r\) px, default 2) | `NaN` | No full \(u \pm r\) / \(v \pm r\) neighborhood |
+| Interior, \(\|\mathbf{n}\| < \tau\) | `NaN` | Degenerate cross product before normalization |
 | Interior, invalid depth | `NaN` | Non-finite or \(d \leq \epsilon\) |
-| Interior, valid depth | Unit vector | Finite differences + normalize + face camera |
+| Interior, valid | Unit vector | Smoothed depth + FD + normalize + face camera |
 
 **Training:** build a mask with `torch.isfinite(normal_map).all(dim=0)` (or per-channel) so losses and gradients ignore `NaN` pixels.
 
