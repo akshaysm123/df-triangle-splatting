@@ -22,7 +22,7 @@ def depth_map_to_normals(
     cx: float,
     cy: float,
     min_depth: float = 1e-6,
-    fd_radius: int = 2,
+    fd_radius: int = 3,
     min_unnormalized_norm: float = 1e-4,
     smooth_depth: bool = True,
 ) -> torch.Tensor:
@@ -84,12 +84,12 @@ def depth_map_to_normals(
     facing = (normals * view_dirs).sum(dim=-1, keepdim=True)
     normals = torch.where(facing > 0, -normals, normals)
 
-    interior_valid = norm_mag >= min_unnormalized_norm
-    normals_to_write = torch.where(
-        interior_valid.unsqueeze(-1), normals, torch.full_like(normals, float("nan"))
-    )
+    # interior_valid = norm_mag >= min_unnormalized_norm
+    # normals_to_write = torch.where(
+    #     interior_valid.unsqueeze(-1), normals, torch.full_like(normals, float("nan"))
+    # )
 
-    output[r:-r, r:-r, :] = normals_to_write
+    output[r:-r, r:-r, :] = normals
 
     valid_depth = torch.isfinite(depth) & (depth > min_depth)
     output[~valid_depth] = float("nan")
