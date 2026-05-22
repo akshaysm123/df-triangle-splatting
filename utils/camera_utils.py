@@ -11,13 +11,17 @@
 
 from scene.cameras import Camera
 import numpy as np
+import torch
 from utils.general_utils import PILtoTorch
 from utils.graphics_utils import fov2focal
 from utils.DA3_utils import prepare_map_for_camera
+from utils.depth_colmap_align import align_depth_to_colmap, load_colmap_sparse
+from utils.depth_to_normal import depth_map_to_normals
 
 WARNED = False
+_colmap_cache = {}
 
-def loadCam(args, id, cam_info, resolution_scale):
+def loadCam(args, id, cam_info, resolution_scale, colmap_data=None):
     orig_w, orig_h = cam_info.image.size
 
     if args.resolution in [1, 2, 4, 8]:
@@ -50,20 +54,65 @@ def loadCam(args, id, cam_info, resolution_scale):
         gt_image = resized_image_rgb
 
     orig_size = (orig_w, orig_h)
-    depth_map = prepare_map_for_camera(cam_info.depth, orig_size, resolution)
+    train_w, train_h = resolution
+
+    depth_np = prepare_map_for_camera(cam_info.depth, orig_size, resolution)
+    if depth_np is not None:
+        depth_hw, depth_scale = align_depth_to_colmap(
+            depth_np[0].numpy(),
+            cam_info,
+            colmap_data,
+            train_w,
+            train_h,
+        )
+        depth_map = torch.from_numpy(depth_hw[np.newaxis, ...].astype(np.float32))
+    else:
+        depth_map = None
+        depth_scale = 1.0
+
     confidence_map = prepare_map_for_camera(cam_info.confidence, orig_size, resolution)
+
+    normal_map = None
+    if depth_map is not None:
+        fx = fov2focal(cam_info.FovX, train_w)
+        fy = fov2focal(cam_info.FovY, train_h)
+        normal_map = depth_map_to_normals(
+            depth_map,
+            fx=fx,
+            fy=fy,
+            cx=train_w / 2.0,
+            cy=train_h / 2.0,
+        )
 
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
                   image=gt_image, gt_alpha_mask=loaded_mask,
                   image_name=cam_info.image_name, uid=id, data_device=args.data_device,
-                  depth_map=depth_map, confidence_map=confidence_map)
+                  depth_map=depth_map, confidence_map=confidence_map, normal_map=normal_map,
+                  depth_scale=depth_scale)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     camera_list = []
 
+    source_path = getattr(args, "source_path", None)
+    colmap_data = None
+    if source_path is not None:
+        if source_path not in _colmap_cache:
+            _colmap_cache[source_path] = load_colmap_sparse(source_path)
+        colmap_data = _colmap_cache[source_path]
+        if colmap_data is not None:
+            print("[ INFO ] Aligning depth maps to COLMAP scale per view")
+
     for id, c in enumerate(cam_infos):
-        camera_list.append(loadCam(args, id, c, resolution_scale))
+        camera_list.append(loadCam(args, id, c, resolution_scale, colmap_data))
+
+    if colmap_data is not None and camera_list:
+        scales = [cam.depth_scale for cam in camera_list if cam.depth_map is not None]
+        if scales:
+            print(
+                f"[ INFO ] Depth COLMAP scale: min={min(scales):.6f}, "
+                f"max={max(scales):.6f}, mean={np.mean(scales):.6f}"
+            )
 
     return camera_list
 

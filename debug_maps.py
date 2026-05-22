@@ -47,25 +47,31 @@ def save_debug_views(views, output_dir):
         rgb = view.original_image[:3].detach().cpu()
         torchvision.utils.save_image(rgb, os.path.join(view_dir, "rgb.png"))
 
-        if view.depth_map is None or view.confidence_map is None:
+        if view.depth_map is None or view.confidence_map is None or view.normal_map is None:
             raise RuntimeError(
-                f"Camera '{name}' is missing depth_map or confidence_map. "
+                f"Camera '{name}' is missing depth_map, confidence_map, or normal_map. "
                 "Check that frame_data/ exists and maps were loaded."
             )
 
         depth = view.depth_map.detach().cpu()
         confidence = view.confidence_map.detach().cpu()
+        normals = view.normal_map.detach().cpu()
 
         np.save(os.path.join(view_dir, "depth.npy"), depth.numpy())
         np.save(os.path.join(view_dir, "confidence.npy"), confidence.numpy())
+        np.save(os.path.join(view_dir, "normals.npy"), normals.numpy())
+        with open(os.path.join(view_dir, "depth_scale.txt"), "w") as f:
+            f.write(f"{view.depth_scale}\n")
 
         depth_vis = scalar_to_colormap(depth, valid_mask=torch.isfinite(depth[0]))
         conf_vis = scalar_to_colormap(confidence, cmap_name="viridis", valid_mask=torch.isfinite(confidence[0]))
+        normal_vis = (normals * 0.5 + 0.5).clamp(0.0, 1.0)
         torchvision.utils.save_image(depth_vis, os.path.join(view_dir, "depth_vis.png"))
         torchvision.utils.save_image(conf_vis, os.path.join(view_dir, "confidence_vis.png"))
+        torchvision.utils.save_image(normal_vis, os.path.join(view_dir, "normals_vis.png"))
 
-        composite = torch.cat([rgb, depth_vis, conf_vis], dim=2)
-        torchvision.utils.save_image(composite, os.path.join(view_dir, "rgb_depth_confidence.png"))
+        composite = torch.cat([rgb, depth_vis, conf_vis, normal_vis], dim=2)
+        torchvision.utils.save_image(composite, os.path.join(view_dir, "rgb_depth_confidence_normals.png"))
 
 
 def main(dataset, opt, no_dome, debug_dir, skip_train, skip_test, max_views):

@@ -23,5 +23,5 @@ conda activate triangle_splatting
     SCENE="bicycle"
     #python train.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE --iterations 5000
     #python render.py -m output/m360/$SCENE --quick
-    python debug_maps.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE/dbg --max_views 5 --skip_test
+    python debug_maps.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE/dbg --max_views 10 --skip_test
 )

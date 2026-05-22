@@ -112,8 +112,9 @@ def training(
 
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
-        depth_map = viewpoint_cam.depth_map          # (1, H, W) or None
-        confidence_map = viewpoint_cam.confidence_map  # (1, H, W) or None
+        depth_map = viewpoint_cam.depth_map            # (1, H, W)
+        confidence_map = viewpoint_cam.confidence_map  # (1, H, W)
+        normal_map = viewpoint_cam.normal_map          # (3, H, W) camera-space unit normals
 
         # Render
         if (iteration - 1) == debug_from:
