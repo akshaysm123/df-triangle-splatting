@@ -65,7 +65,7 @@ def save_debug_views(views, output_dir):
 
         depth_vis = scalar_to_colormap(depth, valid_mask=torch.isfinite(depth[0]))
         conf_vis = scalar_to_colormap(confidence, cmap_name="viridis", valid_mask=torch.isfinite(confidence[0]))
-        normal_vis = (normals * 0.5 + 0.5).clamp(0.0, 1.0)
+        normal_vis = torch.nan_to_num(normals * 0.5 + 0.5, nan=0.0).clamp(0.0, 1.0)
         torchvision.utils.save_image(depth_vis, os.path.join(view_dir, "depth_vis.png"))
         torchvision.utils.save_image(conf_vis, os.path.join(view_dir, "confidence_vis.png"))
         torchvision.utils.save_image(normal_vis, os.path.join(view_dir, "normals_vis.png"))
