@@ -79,6 +79,9 @@ class Scene:
 
         self.cameras_extent = scene_info.nerf_normalization["radius"]
 
+        frame_data_dir = os.path.join(args.source_path, "frame_data")
+        print(f"Loading depth/confidence maps from {frame_data_dir} (one .npz per image with 'depth' and 'confidence' keys)")
+
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)

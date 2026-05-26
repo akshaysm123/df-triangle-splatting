@@ -34,7 +34,13 @@ from arguments import ModelParams, PipelineParams, get_combined_args
 from triangle_renderer import TriangleModel
 
 
-def apply_depth_colormap(depth, alpha, cmap_name="turbo"):
+def apply_normal_vis(normal):
+    """Map unit normals [3,H,W] to RGB for visualization."""
+    n = normal.detach().float().cpu()
+    return torch.nan_to_num(n * 0.5 + 0.5, nan=0.0).clamp(0.0, 1.0)
+
+
+def apply_depth_colormap(depth, alpha, cmap_name="viridis"):
     """Map a single-channel depth map [1,H,W] to RGB using a matplotlib colormap."""
     d = depth[0].detach().float().cpu()
     a = alpha[0].detach().float().cpu()
@@ -71,14 +77,15 @@ def render_set(model_path, name, iteration, views, triangles, pipeline, backgrou
 
 
 def render_set_extended(model_path, name, iteration, views, triangles, pipeline, background, quick):
-    """Render RGB, ground truth, depth colormap, and per-triangle random-color views."""
+    """Render RGB, ground truth, depth colormap, normals, and per-triangle random-color views."""
     base = os.path.join(model_path, name, "ours_{}".format(iteration))
     render_path = os.path.join(base, "renders")
     gts_path = os.path.join(base, "gt")
     depth_path = os.path.join(base, "depth")
+    normal_path = os.path.join(base, "normals")
     random_color_path = os.path.join(base, "random_color")
 
-    for path in (render_path, gts_path, depth_path, random_color_path):
+    for path in (render_path, gts_path, depth_path, normal_path, random_color_path):
         makedirs(path, exist_ok=True)
 
     if quick:
@@ -88,6 +95,7 @@ def render_set_extended(model_path, name, iteration, views, triangles, pipeline,
         pkg = render(view, triangles, pipeline, background)
         rendering = pkg["render"]
         depth_vis = apply_depth_colormap(pkg["surf_depth"], pkg["rend_alpha"])
+        normal_vis = apply_normal_vis(pkg["rend_normal"])
         random_color = pkg["rend_random_color"]
         gt = view.original_image[0:3, :, :]
 
@@ -95,6 +103,7 @@ def render_set_extended(model_path, name, iteration, views, triangles, pipeline,
         torchvision.utils.save_image(rendering, os.path.join(render_path, stem))
         torchvision.utils.save_image(gt, os.path.join(gts_path, stem))
         torchvision.utils.save_image(depth_vis, os.path.join(depth_path, stem))
+        torchvision.utils.save_image(normal_vis, os.path.join(normal_path, stem))
         torchvision.utils.save_image(random_color, os.path.join(random_color_path, stem))
 
 

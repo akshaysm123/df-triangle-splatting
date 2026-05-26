@@ -47,6 +47,66 @@ def l1_loss(network_output, gt):
 def l2_loss(network_output, gt):
     return ((network_output - gt) ** 2).mean()
 
+
+def _squeeze_hw(t):
+    if t is None:
+        return None
+    return t.squeeze(0) if t.dim() == 3 else t
+
+
+def confidence_weighted_mean(values, weight, mask, eps=1e-8):
+    """Mean of `values` over pixels where `mask` is true, weighted by `weight`."""
+    m = mask.to(values.dtype)
+    w = weight * m
+    denom = w.sum()
+    if denom <= eps:
+        return values.new_zeros(())
+    num = (values * w).sum()
+    if not torch.isfinite(num):
+        return values.new_zeros(())
+    return num / denom
+
+
+def depth_supervision_loss(pred, gt, confidence, min_depth=1e-6):
+    """
+    L1 depth error weighted by confidence and 1/gt (more weight on nearby geometry).
+    pred, gt, confidence: (1, H, W) or (H, W).
+    """
+    pred = _squeeze_hw(pred)
+    gt = _squeeze_hw(gt)
+    confidence = _squeeze_hw(confidence)
+
+    valid = torch.isfinite(gt) & torch.isfinite(pred) & (gt > min_depth) & (confidence > 0)
+    err = torch.where(valid, (pred - gt).abs(), torch.zeros_like(pred)) # L1
+    inv_depth_weight = 1.0 / gt.clamp(min=min_depth) # inverse depth importance weighing
+    pixel_weight = confidence * inv_depth_weight # confidence in [0,1]
+    return confidence_weighted_mean(err, pixel_weight, valid)
+
+
+def normal_supervision_loss(pred, gt, confidence):
+    """
+    Angular normal error (1 - dot product) for unit normals, confidence-weighted.
+    pred, gt: (3, H, W). Invalid gt pixels (NaN) are excluded.
+    """
+    confidence = _squeeze_hw(confidence)
+    valid = (
+        torch.isfinite(gt).all(dim=0) # all(dim=0) for (H x W)
+        & torch.isfinite(pred).all(dim=0)
+        & (confidence > 0)
+    )
+    pred_u = F.normalize(pred, dim=0, eps=1e-8)
+    gt_u = F.normalize(torch.nan_to_num(gt, nan=0.0), dim=0, eps=1e-8)
+    dot = (pred_u * gt_u).sum(dim=0).clamp(-1.0, 1.0)
+    err = torch.where(valid, 1.0 - dot, torch.zeros_like(dot))
+    return confidence_weighted_mean(err, confidence, valid)
+
+
+def camera_normals_to_world(normal_map, world_view_transform):
+    """Map camera-space normals (3, H, W) to world space (same convention as renderer)."""
+    return (
+        normal_map.permute(1, 2, 0) @ world_view_transform[:3, :3].T
+    ).permute(2, 0, 1)
+
 def lp_loss(pred, target, p=0.7, eps=1e-6):
     """
     Computes Lp loss with 0 < p < 1.

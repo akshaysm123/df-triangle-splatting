@@ -23,7 +23,15 @@
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim, equilateral_regularizer, l2_loss
+from utils.loss_utils import (
+    l1_loss,
+    ssim,
+    equilateral_regularizer,
+    l2_loss,
+    depth_supervision_loss,
+    normal_supervision_loss,
+    camera_normals_to_world,
+)
 from triangle_renderer import render
 import sys
 from scene import Scene, TriangleModel
@@ -112,6 +120,9 @@ def training(
 
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
+        depth_map = viewpoint_cam.depth_map            # (1, H, W)
+        confidence_map = viewpoint_cam.confidence_map  # (1, H, W)
+        normal_map = viewpoint_cam.normal_map          # (3, H, W) camera-space unit normals
 
         # Render
         if (iteration - 1) == debug_from:
@@ -120,10 +131,12 @@ def training(
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
         render_pkg = render(viewpoint_cam, triangles, pipe, bg)
-        image = render_pkg["render"]
+        # H, W = viewpoint_cam.image_height, viewpoint_cam.image_width
+        # N = number of triangles
+        image = render_pkg["render"]                       # (3, H, W) composited RGB
 
         # largest distance from point to center of image
-        triangle_area = render_pkg["density_factor"].detach()
+        triangle_area = render_pkg["density_factor"].detach() 
         # largest distance from point after applying sigma to center of image
         image_size = render_pkg["scaling"].detach()
         importance_score = render_pkg["max_blending"].detach()
@@ -149,24 +162,39 @@ def training(
         # loss opacity
         loss_opacity = torch.abs(triangles.get_opacity).mean() * args.lambda_opacity
 
-        # loss normal and distortion
-        rend_normal  = render_pkg['rend_normal']
-        surf_normal = render_pkg['surf_normal']
-        lambda_dist = opt.lambda_dist if iteration > opt.iteration_mesh else 0
-        lambda_normal = opt.lambda_normals if iteration > opt.iteration_mesh else 0 # 0.001
-        rend_dist = render_pkg["rend_dist"]
+        # depth / normal supervision (DA3 GT) and distortion
+        lambda_dist = opt.lambda_dist #if iteration > opt.iteration_mesh else 0
+        lambda_normal = opt.lambda_normals #if iteration > opt.iteration_mesh else 0
+        lambda_depth = opt.lambda_depth #if iteration > opt.iteration_mesh else 0
+
+        rend_dist = render_pkg["rend_dist"]                # (1, H, W) depth distortion map
         dist_loss = lambda_dist * (rend_dist).mean()
-        normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None]
-        normal_loss = lambda_normal * (normal_error).mean()
+
+        surf_depth = render_pkg["surf_depth"]              # (1, H, W) camera-space surface depth
+        rend_normal = render_pkg["rend_normal"]            # (3, H, W) world-space rendered normals
+
+        depth_loss = surf_depth.new_zeros(())
+        normal_loss = surf_depth.new_zeros(())
+        if lambda_depth > 0:
+            depth_loss = lambda_depth * depth_supervision_loss(
+                surf_depth, depth_map, confidence_map
+            )
+        if lambda_normal > 0:
+            gt_normal_world = camera_normals_to_world(
+                normal_map, viewpoint_cam.world_view_transform
+            )
+            normal_loss = lambda_normal * normal_supervision_loss(
+                rend_normal, gt_normal_world, confidence_map
+            )
 
         loss_size = 1 / equilateral_regularizer(triangles.get_triangles_points).mean() 
         loss_size = loss_size * opt.lambda_size
 
 
         if iteration < opt.densify_until_iter:
-            loss = loss_image + loss_opacity + normal_loss + dist_loss + loss_size
+            loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss + loss_size
         else:
-            loss = loss_image + loss_opacity + normal_loss + dist_loss
+            loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss
 
         loss.backward()
      
@@ -178,6 +206,8 @@ def training(
             if iteration % 10 == 0:
                 loss_dict = {
                     "Loss": f"{ema_loss_for_log:.{5}f}",
+                    "depth": f"{depth_loss.item():.{4}f}",
+                    "normal": f"{normal_loss.item():.{4}f}",
                 }
                 progress_bar.set_postfix(loss_dict)
                 progress_bar.update(10)
@@ -186,7 +216,11 @@ def training(
 
             # Log and save
             
-            training_report(tb_writer, iteration, pixel_loss, loss, loss_fn, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+            training_report(
+                tb_writer, iteration, pixel_loss, loss, loss_fn,
+                iter_start.elapsed_time(iter_end), testing_iterations, scene, render,
+                (pipe, background), depth_loss, normal_loss,
+            )
             if iteration in save_iterations:
                 print("\n[ITER {}] Saving Triangles".format(iteration))
                 scene.save(iteration)
@@ -277,10 +311,18 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, pixel_loss, loss, loss_fn, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
+def training_report(
+    tb_writer, iteration, pixel_loss, loss, loss_fn, elapsed,
+    testing_iterations, scene: Scene, renderFunc, renderArgs,
+    depth_loss=None, normal_loss=None,
+):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/pixel_loss', pixel_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
+        if depth_loss is not None:
+            tb_writer.add_scalar('train_loss_patches/depth_loss', depth_loss.item(), iteration)
+        if normal_loss is not None:
+            tb_writer.add_scalar('train_loss_patches/normal_loss', normal_loss.item(), iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
 
     # Report test and samples of training set
