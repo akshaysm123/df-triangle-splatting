@@ -105,7 +105,7 @@ class OptimizationParams(ParamGroup):
 
         self.noise_lr = 5e5
         self.mask_dead = 0.08
-        self.lambda_normals = 0.0001
+        self.lambda_normals = 0.01 # 0.0001
         self.lambda_depth = 0.01
         self.lambda_dist = 0.0
         self.lambda_opacity = 0.0055
