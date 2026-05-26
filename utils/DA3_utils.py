@@ -15,6 +15,15 @@ def _as_2d_float32(arr: np.ndarray, key: str, path: str) -> np.ndarray:
     return arr
 
 
+def normalize_confidence_minmax(confidence: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """Min-max normalize confidence to [0, 1]: (c - min) / (max - min)."""
+    c_min = float(confidence.min())
+    c_max = float(confidence.max())
+    if c_max - c_min <= eps:
+        return np.ones_like(confidence, dtype=np.float32)
+    return ((confidence - c_min) / (c_max - c_min)).astype(np.float32)
+
+
 def load_depth_confidence_maps(scene_path: str, image_stem: str):
     """
     Load depth and confidence from a single .npz per image.
@@ -37,6 +46,7 @@ def load_depth_confidence_maps(scene_path: str, image_stem: str):
             )
         depth = _as_2d_float32(data["depth"], "depth", path)
         confidence = _as_2d_float32(data["confidence"], "confidence", path)
+        confidence = normalize_confidence_minmax(confidence)
 
     return depth, confidence
 

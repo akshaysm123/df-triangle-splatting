@@ -10,18 +10,18 @@ This note documents how unit surface normals are estimated from aligned depth ma
 
 | Item | Shape | Description |
 |------|-------|-------------|
-| Input `depth` | `(1, H, W)` or `(H, W)` | Aligned metric depth; \(z = d\) in camera frame |
+| Input `depth` | `(1, H, W)` or `(H, W)` | Aligned metric depth; $z = d$ in camera frame |
 | Intrinsics | scalars `fx, fy, cx, cy` | Pinhole parameters in **pixels** at training resolution |
 | Output `normal_map` | `(3, H, W)` | Unit normals in camera space; borders / invalid → `NaN` |
 
 Focal lengths are derived from FoV and image size:
 
-\[
+$$
 f_x = \frac{W}{2 \tan(\mathrm{FoV}_x / 2)}, \qquad
 f_y = \frac{H}{2 \tan(\mathrm{FoV}_y / 2)}
-\]
+$$
 
-Principal point defaults to image center: \(c_x = W/2\), \(c_y = H/2\).
+Principal point defaults to image center: $c_x = W/2$, $c_y = H/2$.
 
 ---
 
@@ -39,51 +39,51 @@ This reduces high-frequency noise in the depth map that would otherwise create s
 
 ## Step 1: Backproject to Camera-Space Points
 
-For each pixel \((u, v)\) with depth \(d(u,v)\), the 3D point in **camera coordinates** is:
+For each pixel $(u, v)$ with depth $d(u,v)$, the 3D point in **camera coordinates** is:
 
-\[
+$$
 \mathbf{P}(u,v) = d \cdot K^{-1} \begin{pmatrix} u \\ v \\ 1 \end{pmatrix}
-\]
+$$
 
-With standard pinhole \(K\):
+With standard pinhole $K$:
 
-\[
+$$
 P_x = \frac{(u - c_x)\, d}{f_x}, \qquad
 P_y = \frac{(v - c_y)\, d}{f_y}, \qquad
 P_z = d
-\]
+$$
 
-This yields an \(H \times W \times 3\) **structured point cloud**—one point per pixel, row index \(v\), column index \(u\).
+This yields an $H \times W \times 3$ **structured point cloud**—one point per pixel, row index $v$, column index $u$.
 
 ---
 
 ## Step 2: Tangent Vectors via Central Differences
 
-Because neighbors lie on a grid, tangents use **central differences** with radius \(r\) (default \(r = 2\)) on interior pixels:
+Because neighbors lie on a grid, tangents use **central differences** with radius $r$ (default $r = 2$) on interior pixels:
 
-**Along \(u\) (horizontal):**
+**Along $u$ (horizontal):**
 
-\[
+$$
 \mathbf{t}_x(u,v) = \mathbf{P}(u+r, v) - \mathbf{P}(u-r, v)
-\]
+$$
 
-**Along \(v\) (vertical):**
+**Along $v$ (vertical):**
 
-\[
+$$
 \mathbf{t}_y(u,v) = \mathbf{P}(u, v+r) - \mathbf{P}(u, v-r)
-\]
+$$
 
-Let `span = 2r`. In tensor layout `points[v, u, :]` (row = \(v\), col = \(u\)):
+Let `span = 2r`. In tensor layout `points[v, u, :]` (row = $v$, col = $u$):
 
-- \(\mathbf{t}_x\) = `points[:, span:, :] - points[:, :-span, :]` → shape \((H,\, W - 2r,\, 3)\)
-- \(\mathbf{t}_y\) = `points[span:, :, :] - points[:-span, :, :]` → shape \((H - 2r,\, W,\, 3)\)
+- $\mathbf{t}_x$ = `points[:, span:, :] - points[:, :-span, :]` → shape $(H,\, W - 2r,\, 3)$
+- $\mathbf{t}_y$ = `points[span:, :, :] - points[:-span, :, :]` → shape $(H - 2r,\, W,\, 3)$
 
-Cross product on the **interior overlap** (both tangents defined at the same center \((u,v)\)):
+Cross product on the **interior overlap** (both tangents defined at the same center $(u,v)$):
 
-- `t_x_mid = t_x[r:-r, :, :]` → \((H - 2r,\, W - 2r,\, 3)\)
-- `t_y_mid = t_y[:, r:-r, :]` → \((H - 2r,\, W - 2r,\, 3)\)
+- `t_x_mid = t_x[r:-r, :, :]` → $(H - 2r,\, W - 2r,\, 3)$
+- `t_y_mid = t_y[:, r:-r, :]` → $(H - 2r,\, W - 2r,\, 3)$
 
-Valid centers: \(u \in [r,\, W-r-1]\), \(v \in [r,\, H-r-1]\). With \(r=2\), the **border is 2 pixels** wide (all `NaN`).
+Valid centers: $u \in [r,\, W-r-1]$, $v \in [r,\, H-r-1]$. With $r=2$, the **border is 2 pixels** wide (all `NaN`).
 
 ---
 
@@ -91,15 +91,15 @@ Valid centers: \(u \in [r,\, W-r-1]\), \(v \in [r,\, H-r-1]\). With \(r=2\), the
 
 Unnormalized normal (interior pixels only):
 
-\[
+$$
 \mathbf{n}(u,v) = \mathbf{t}_x(u,v) \times \mathbf{t}_y(u,v)
-\]
+$$
 
-Let \(m = \|\mathbf{n}\|\). If \(m < \tau\) (default \(\tau = 10^{-4}\)), the pixel is set to **`NaN`** (degenerate / near-flat patch). Otherwise:
+Let $m = \|\mathbf{n}\|$. If $m < \tau$ (default $\tau = 10^{-4}$), the pixel is set to **`NaN`** (degenerate / near-flat patch). Otherwise:
 
-\[
+$$
 \hat{\mathbf{n}}(u,v) = \frac{\mathbf{n}}{m}
-\]
+$$
 
 ---
 
@@ -107,17 +107,17 @@ Let \(m = \|\mathbf{n}\|\). If \(m < \tau\) (default \(\tau = 10^{-4}\)), the pi
 
 The camera is at the origin in camera space. The **view direction** toward the surface point is:
 
-\[
+$$
 \mathbf{v}(u,v) = \mathbf{P}(u,v)
-\]
+$$
 
 Normals should point **toward** the camera (visible front face). If the normal faces away:
 
-\[
+$$
 \hat{\mathbf{n}} \cdot \mathbf{P} > 0 \quad \Rightarrow \quad \hat{\mathbf{n}} \leftarrow -\hat{\mathbf{n}}
-\]
+$$
 
-Equivalently: keep the normal such that \(\hat{\mathbf{n}} \cdot \mathbf{P} \leq 0\).
+Equivalently: keep the normal such that $\hat{\mathbf{n}} \cdot \mathbf{P} \leq 0$.
 
 ---
 
@@ -127,14 +127,14 @@ The output map is initialized to **`NaN`**. Only interior pixels with valid cent
 
 | Region | Normal value | Reason |
 |--------|--------------|--------|
-| Border (\(r\) px, default 2) | `NaN` | No full \(u \pm r\) / \(v \pm r\) neighborhood |
-| Interior, \(\|\mathbf{n}\| < \tau\) | `NaN` | Degenerate cross product before normalization |
-| Interior, invalid depth | `NaN` | Non-finite or \(d \leq \epsilon\) |
+| Border ($r$ px, default 2) | `NaN` | No full $u \pm r$ / $v \pm r$ neighborhood |
+| Interior, $\|\mathbf{n}\| < \tau$ | `NaN` | Degenerate cross product before normalization |
+| Interior, invalid depth | `NaN` | Non-finite or $d \leq \epsilon$ |
 | Interior, valid | Unit vector | Smoothed depth + FD + normalize + face camera |
 
 **Training:** build a mask with `torch.isfinite(normal_map).all(dim=0)` (or per-channel) so losses and gradients ignore `NaN` pixels.
 
-**Debug visualization:** `debug_maps.py` maps `NaN` → 0 for PNG output via `torch.nan_to_num(..., nan=0.0)` before the \((\hat{\mathbf{n}} + 1)/2\) color mapping. Raw `normals.npy` keeps `NaN`.
+**Debug visualization:** `debug_maps.py` maps `NaN` → 0 for PNG output via `torch.nan_to_num(..., nan=0.0)` before the $(\hat{\mathbf{n}} + 1)/2$ color mapping. Raw `normals.npy` keeps `NaN`.
 
 ---
 
@@ -142,10 +142,10 @@ The output map is initialized to **`NaN`**. Only interior pixels with valid cent
 
 Normals are in the **same camera coordinate system** as COLMAP / training cameras:
 
-- \(+X\) right, \(+Y\) down, \(+Z\) forward
-- Consistent with depth \(z = P_z\) used in alignment
+- $+X$ right, $+Y$ down, $+Z$ forward
+- Consistent with depth $z = P_z$ used in alignment
 
-To use normals in **world space**, apply the camera rotation (e.g. with \(R_{\text{colmap}}\) from the view pose). That transform is not applied in the current loading path.
+To use normals in **world space**, apply the camera rotation (e.g. with $R_{\text{colmap}}$ from the view pose). That transform is not applied in the current loading path.
 
 ---
 
@@ -164,7 +164,7 @@ Normals are computed **after** COLMAP scale alignment so geometry matches metric
 For inspection (`debug_maps.py`):
 
 - Raw array: `normals.npy`, shape `(3, H, W)` (includes `NaN` on borders)
-- RGB preview: `nan_to_num` → 0 on borders, then \(\text{RGB} = 0.5\,(\hat{\mathbf{n}} + 1)\) clamped to \([0,1]\)
+- RGB preview: `nan_to_num` → 0 on borders, then $\text{RGB} = 0.5\,(\hat{\mathbf{n}} + 1)$ clamped to $[0,1]$
 
 ---
 

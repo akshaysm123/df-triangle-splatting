@@ -131,10 +131,12 @@ def training(
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
         render_pkg = render(viewpoint_cam, triangles, pipe, bg)
-        image = render_pkg["render"]
+        # H, W = viewpoint_cam.image_height, viewpoint_cam.image_width
+        # N = number of triangles
+        image = render_pkg["render"]                       # (3, H, W) composited RGB
 
         # largest distance from point to center of image
-        triangle_area = render_pkg["density_factor"].detach()
+        triangle_area = render_pkg["density_factor"].detach() 
         # largest distance from point after applying sigma to center of image
         image_size = render_pkg["scaling"].detach()
         importance_score = render_pkg["max_blending"].detach()
@@ -165,21 +167,25 @@ def training(
         lambda_normal = opt.lambda_normals if iteration > opt.iteration_mesh else 0
         lambda_depth = opt.lambda_depth if iteration > opt.iteration_mesh else 0
 
-        rend_dist = render_pkg["rend_dist"]
+        rend_dist = render_pkg["rend_dist"]                # (1, H, W) depth distortion map
         dist_loss = lambda_dist * (rend_dist).mean()
 
-        surf_depth = render_pkg["surf_depth"]
-        gt_normal_world = camera_normals_to_world(
-            normal_map, viewpoint_cam.world_view_transform
-        )
-        rend_normal = render_pkg["rend_normal"]
+        surf_depth = render_pkg["surf_depth"]              # (1, H, W) camera-space surface depth
+        rend_normal = render_pkg["rend_normal"]            # (3, H, W) world-space rendered normals
 
-        depth_loss = lambda_depth * depth_supervision_loss(
-            surf_depth, depth_map, confidence_map
-        )
-        normal_loss = lambda_normal * normal_supervision_loss(
-            rend_normal, gt_normal_world, confidence_map
-        )
+        depth_loss = surf_depth.new_zeros(())
+        normal_loss = surf_depth.new_zeros(())
+        if lambda_depth > 0:
+            depth_loss = lambda_depth * depth_supervision_loss(
+                surf_depth, depth_map, confidence_map
+            )
+        if lambda_normal > 0:
+            gt_normal_world = camera_normals_to_world(
+                normal_map, viewpoint_cam.world_view_transform
+            )
+            normal_loss = lambda_normal * normal_supervision_loss(
+                rend_normal, gt_normal_world, confidence_map
+            )
 
         loss_size = 1 / equilateral_regularizer(triangles.get_triangles_points).mean() 
         loss_size = loss_size * opt.lambda_size
