@@ -47,6 +47,53 @@ def l1_loss(network_output, gt):
 def l2_loss(network_output, gt):
     return ((network_output - gt) ** 2).mean()
 
+
+def _squeeze_hw(t):
+    if t is None:
+        return None
+    return t.squeeze(0) if t.dim() == 3 else t
+
+
+def confidence_weighted_mean(values, confidence, mask, eps=1e-8):
+    """Mean of `values` over pixels where `mask` is true, weighted by `confidence`."""
+    w = confidence * mask.to(values.dtype)
+    denom = w.sum().clamp(min=eps)
+    return (values * w).sum() / denom
+
+
+def depth_supervision_loss(pred, gt, confidence, min_depth=1e-6):
+    """
+    L1 depth error weighted by confidence and 1/gt (more weight on nearby geometry).
+    pred, gt, confidence: (1, H, W) or (H, W).
+    """
+    pred = _squeeze_hw(pred)
+    gt = _squeeze_hw(gt)
+    confidence = _squeeze_hw(confidence)
+
+    valid = torch.isfinite(gt) & torch.isfinite(pred) & (gt > min_depth)
+    err = (pred - gt).abs()
+    inv_depth_weight = 1.0 / gt.clamp(min=min_depth)
+    return confidence_weighted_mean(err, confidence * inv_depth_weight, valid)
+
+
+def normal_supervision_loss(pred, gt, confidence):
+    """
+    Angular normal error (1 - dot product) for unit normals, confidence-weighted.
+    pred, gt: (3, H, W). Invalid gt pixels (NaN) are excluded.
+    """
+    confidence = _squeeze_hw(confidence)
+    valid = torch.isfinite(gt).all(dim=0) & torch.isfinite(pred).all(dim=0)
+    dot = (pred * gt).sum(dim=0).clamp(-1.0, 1.0)
+    err = 1.0 - dot
+    return confidence_weighted_mean(err, confidence, valid)
+
+
+def camera_normals_to_world(normal_map, world_view_transform):
+    """Map camera-space normals (3, H, W) to world space (same convention as renderer)."""
+    return (
+        normal_map.permute(1, 2, 0) @ world_view_transform[:3, :3].T
+    ).permute(2, 0, 1)
+
 def lp_loss(pred, target, p=0.7, eps=1e-6):
     """
     Computes Lp loss with 0 < p < 1.
