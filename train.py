@@ -163,9 +163,9 @@ def training(
         loss_opacity = torch.abs(triangles.get_opacity).mean() * args.lambda_opacity
 
         # depth / normal supervision (DA3 GT) and distortion
-        lambda_dist = opt.lambda_dist if iteration > opt.iteration_mesh else 0
-        lambda_normal = opt.lambda_normals if iteration > opt.iteration_mesh else 0
-        lambda_depth = opt.lambda_depth if iteration > opt.iteration_mesh else 0
+        lambda_dist = opt.lambda_dist #if iteration > opt.iteration_mesh else 0
+        lambda_normal = opt.lambda_normals #if iteration > opt.iteration_mesh else 0
+        lambda_depth = opt.lambda_depth #if iteration > opt.iteration_mesh else 0
 
         rend_dist = render_pkg["rend_dist"]                # (1, H, W) depth distortion map
         dist_loss = lambda_dist * (rend_dist).mean()
