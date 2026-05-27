@@ -126,7 +126,7 @@ class OptimizationParams(ParamGroup):
 
         self.max_shapes = 4000000
 
-        self.add_shape = 1.3
+        self.add_shape = 1.3 # might need to be changed
 
         self.p = 1.6
 

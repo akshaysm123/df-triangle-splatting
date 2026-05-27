@@ -107,8 +107,8 @@ def training(
         triangles.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
-        if iteration % 1000 == 0:
-            triangles.oneupSHdegree()
+        # if iteration % 1000 == 0:
+        #     triangles.oneupSHdegree()
 
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
@@ -157,7 +157,8 @@ def training(
         ##############################################################
         # WE ADD A LOSS FORCING LOW OPACITIES                        #
         ##############################################################
-        loss_image = (1.0 - opt.lambda_dssim) * pixel_loss + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        #loss_image = (1.0 - opt.lambda_dssim) * pixel_loss + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        loss_image = 0.0
 
         # loss opacity
         loss_opacity = torch.abs(triangles.get_opacity).mean() * args.lambda_opacity
