@@ -28,7 +28,7 @@ from utils.loss_utils import (
     ssim,
     equilateral_regularizer,
     l2_loss,
-    depth_supervision_loss,
+    depth_combined_loss,
     normal_supervision_loss,
     camera_normals_to_world,
 )
@@ -166,13 +166,22 @@ def training(
         # depth / normal supervision (DA3 GT) and distortion
         lambda_dist = opt.lambda_dist if iteration > opt.iteration_mesh else 0
         lambda_normal = opt.lambda_normals if iteration > opt.iteration_mesh else 0
-        lambda_depth = opt.lambda_depth if iteration > opt.iteration_mesh else 0 # unused
+        lambda_depth = opt.lambda_depth if iteration > opt.iteration_mesh else 0
 
         rend_normal = render_pkg["rend_normal"]            # (3, H, W) world space rendered normals
         surf_normal = render_pkg['surf_normal']            # (3, H, W) world space normal from finite differences depth
         surf_depth = render_pkg["surf_depth"]              # (1, H, W) camera-space surface depth
-        # surf depth is not used here, but a direct supervision gradient can flow through it
         rend_dist = render_pkg["rend_dist"]                # (1, H, W) depth distortion map
+
+        depth_loss = surf_depth.new_zeros(())
+        if lambda_depth > 0 and depth_map is not None:
+            depth_loss = lambda_depth * depth_combined_loss(
+                surf_depth,
+                depth_map.cuda(),
+                log_l1_weight=opt.depth_log_l1_weight,
+                pearson_weight=opt.depth_pearson_weight,
+                patch_size=opt.depth_pearson_patch_size,
+            )
 
         dist_loss = lambda_dist * (rend_dist).mean()
         normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None] 
@@ -182,9 +191,9 @@ def training(
         loss_size = loss_size * opt.lambda_size
 
         if iteration < opt.densify_until_iter:
-            loss = loss_image + loss_opacity + normal_loss + dist_loss + loss_size
+            loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss + loss_size
         else:
-            loss = loss_image + loss_opacity + normal_loss + dist_loss
+            loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss
 
         loss.backward()
      
@@ -196,7 +205,7 @@ def training(
             if iteration % 10 == 0:
                 loss_dict = {
                     "Loss": f"{ema_loss_for_log:.{5}f}",
-                    #"depth": f"{depth_loss.item():.{4}f}",
+                    "depth": f"{depth_loss.item():.{4}f}",
                     "normal": f"{normal_loss.item():.{4}f}",
                 }
                 progress_bar.set_postfix(loss_dict)
@@ -209,7 +218,7 @@ def training(
             training_report(
                 tb_writer, iteration, pixel_loss, loss, loss_fn,
                 iter_start.elapsed_time(iter_end), testing_iterations, scene, render,
-                (pipe, background), normal_loss,
+                (pipe, background), depth_loss=depth_loss, normal_loss=normal_loss,
             )
             if iteration in save_iterations:
                 print("\n[ITER {}] Saving Triangles".format(iteration))

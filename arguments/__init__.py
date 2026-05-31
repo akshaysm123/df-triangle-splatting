@@ -107,6 +107,9 @@ class OptimizationParams(ParamGroup):
         self.mask_dead = 0.08
         self.lambda_normals = 0.0001 # 0.0001
         self.lambda_depth = 0.01
+        self.depth_log_l1_weight = 0.9
+        self.depth_pearson_weight = 0.1
+        self.depth_pearson_patch_size = 32
         self.lambda_dist = 0.0
         self.lambda_opacity = 0.0055
         self.lambda_size = 0.00000001

@@ -52,11 +52,53 @@ def log_l1_loss(network_output, gt, eps=1e-6, normalize=False):
     """L1 loss in log space: mean(|log(pred) - log(gt)|). Inputs must be positive."""
     pred = network_output.clamp(min=eps)
     target = gt.clamp(min=eps)
-    if not normalize:
-        return torch.abs(torch.log(pred) - torch.log(target)).mean()
-    else:
-        normL1 =  torch.abs(torch.log(pred) - torch.log(target)) / (torch.log(target) + eps)
-        return normL1.mean()
+    return torch.abs(torch.log(pred) - torch.log(target)).mean()
+
+
+def _pearson_loss_batched(pred, target, weight=None, eps=1e-8):
+    """
+    1 minus weighted Pearson r per row.
+    pred, target: (N, P). Optional weight: (N, P), zero excludes a pixel.
+    """
+    if weight is None:
+        weight = torch.ones_like(pred)
+    w = weight.clamp(min=0)
+    w_sum = w.sum(dim=-1, keepdim=True).clamp(min=eps)
+
+    pred_mean = (pred * w).sum(dim=-1, keepdim=True) / w_sum
+    target_mean = (target * w).sum(dim=-1, keepdim=True) / w_sum
+    pred_c = pred - pred_mean
+    target_c = target - target_mean
+
+    cov = (w * pred_c * target_c).sum(dim=-1)
+    var_pred = (w * pred_c.pow(2)).sum(dim=-1)
+    var_target = (w * target_c.pow(2)).sum(dim=-1)
+    denom = torch.sqrt(var_pred) * torch.sqrt(var_target) + eps
+    return 1.0 - cov / denom
+
+
+def _pad_to_patch_grid(t, patch_size):
+    h, w = t.shape
+    pad_h = (patch_size - h % patch_size) % patch_size
+    pad_w = (patch_size - w % patch_size) % patch_size
+    if pad_h or pad_w:
+        t = F.pad(t, (0, pad_w, 0, pad_h))
+    return t
+
+
+def _patches_from_padded_hw(t, patch_size):
+    hp, wp = t.shape
+    nh, nw = hp // patch_size, wp // patch_size
+    return (
+        t.view(nh, patch_size, nw, patch_size)
+        .permute(0, 2, 1, 3)
+        .reshape(nh * nw, patch_size * patch_size)
+    )
+
+
+def _extract_patches_hw(t, patch_size):
+    """Split (H, W) into non-overlapping patches -> (num_patches, patch_size**2)."""
+    return _patches_from_padded_hw(_pad_to_patch_grid(t, patch_size), patch_size)
 
 
 def pearson_correlation_loss(network_output, gt, eps=1e-8):
@@ -64,17 +106,95 @@ def pearson_correlation_loss(network_output, gt, eps=1e-8):
     1 minus Pearson correlation between flattened pred and gt.
     Zero when perfectly linearly correlated; higher when less correlated.
     """
-    pred = network_output.reshape(-1)
-    target = gt.reshape(-1)
-    pred_centered = pred - pred.mean()
-    target_centered = target - target.mean()
-    numerator = (pred_centered * target_centered).sum()
-    denominator = (
-        torch.sqrt((pred_centered ** 2).sum())
-        * torch.sqrt((target_centered ** 2).sum())
-        + eps
+    pred = network_output.reshape(1, -1)
+    target = gt.reshape(1, -1)
+    return _pearson_loss_batched(pred, target, eps=eps).squeeze()
+
+
+def pearson_correlation_loss_patches(
+    network_output,
+    gt,
+    confidence=None,
+    patch_size=32,
+    min_depth=1e-6,
+    min_valid_ratio=0.5,
+    eps=1e-8,
+):
+    """
+    Mean patch-wise Pearson loss (1 - r), with optional confidence weighting.
+    pred, gt, confidence: (1, H, W) or (H, W). Invalid / low-confidence pixels
+    are excluded per patch; patches with too few valid pixels are skipped.
+    """
+    pred = _squeeze_hw(network_output)
+    target = _squeeze_hw(gt)
+
+    valid = torch.isfinite(target) & torch.isfinite(pred) & (target > min_depth)
+    if confidence is not None:
+        confidence = _squeeze_hw(confidence)
+        valid = valid & (confidence > 0)
+        pixel_weight = confidence
+    else:
+        pixel_weight = torch.ones_like(pred)
+
+    pred = torch.where(valid, pred, torch.zeros_like(pred))
+    target = torch.where(valid, target, torch.zeros_like(target))
+    pixel_weight = torch.where(valid, pixel_weight, torch.zeros_like(pixel_weight))
+
+    pred = _pad_to_patch_grid(pred, patch_size)
+    target = _pad_to_patch_grid(target, patch_size)
+    pixel_weight = _pad_to_patch_grid(pixel_weight, patch_size)
+    valid = _pad_to_patch_grid(valid.float(), patch_size) > 0.5
+
+    pred_patches = _patches_from_padded_hw(pred, patch_size)
+    target_patches = _patches_from_padded_hw(target, patch_size)
+    weight_patches = _patches_from_padded_hw(pixel_weight, patch_size)
+    valid_patches = _patches_from_padded_hw(valid.float(), patch_size) > 0.5
+
+    patch_losses = _pearson_loss_batched(
+        pred_patches, target_patches, weight=weight_patches, eps=eps
     )
-    return 1.0 - numerator / denominator
+    valid_ratio = valid_patches.float().mean(dim=-1)
+    patch_valid = valid_ratio >= min_valid_ratio
+
+    valid_count = valid_patches.float().sum(dim=-1).clamp(min=eps)
+    patch_weight = (weight_patches * valid_patches.float()).sum(dim=-1) / valid_count
+
+    return confidence_weighted_mean(patch_losses, patch_weight, patch_valid, eps=eps)
+
+
+def depth_combined_loss(
+    pred,
+    gt,
+    log_l1_weight=0.9,
+    pearson_weight=0.1,
+    patch_size=32,
+    min_depth=1e-6,
+    eps=1e-6,
+):
+    """
+    Depth supervision: log_l1_weight * log-L1 + pearson_weight * patch Pearson.
+    pred, gt: (1, H, W) or (H, W). No confidence weighting.
+    """
+    pred = _squeeze_hw(pred)
+    gt = _squeeze_hw(gt)
+
+    valid = (
+        torch.isfinite(gt)
+        & torch.isfinite(pred)
+        & (gt > min_depth)
+        & (pred > min_depth)
+    )
+    log_l1 = pred.new_zeros(())
+    if valid.any():
+        log_err = torch.abs(
+            torch.log(pred.clamp(min=eps)) - torch.log(gt.clamp(min=eps))
+        )
+        log_l1 = log_err[valid].mean()
+
+    pearson = pearson_correlation_loss_patches(
+        pred, gt, confidence=None, patch_size=patch_size, min_depth=min_depth
+    )
+    return log_l1_weight * log_l1 + pearson_weight * pearson
 
 
 def _squeeze_hw(t):
