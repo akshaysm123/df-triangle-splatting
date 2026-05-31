@@ -48,6 +48,35 @@ def l2_loss(network_output, gt):
     return ((network_output - gt) ** 2).mean()
 
 
+def log_l1_loss(network_output, gt, eps=1e-6, normalize=False):
+    """L1 loss in log space: mean(|log(pred) - log(gt)|). Inputs must be positive."""
+    pred = network_output.clamp(min=eps)
+    target = gt.clamp(min=eps)
+    if not normalize:
+        return torch.abs(torch.log(pred) - torch.log(target)).mean()
+    else:
+        normL1 =  torch.abs(torch.log(pred) - torch.log(target)) / (torch.log(target) + eps)
+        return normL1.mean()
+
+
+def pearson_correlation_loss(network_output, gt, eps=1e-8):
+    """
+    1 minus Pearson correlation between flattened pred and gt.
+    Zero when perfectly linearly correlated; higher when less correlated.
+    """
+    pred = network_output.reshape(-1)
+    target = gt.reshape(-1)
+    pred_centered = pred - pred.mean()
+    target_centered = target - target.mean()
+    numerator = (pred_centered * target_centered).sum()
+    denominator = (
+        torch.sqrt((pred_centered ** 2).sum())
+        * torch.sqrt((target_centered ** 2).sum())
+        + eps
+    )
+    return 1.0 - numerator / denominator
+
+
 def _squeeze_hw(t):
     if t is None:
         return None
