@@ -205,8 +205,8 @@ def training(
             if iteration % 10 == 0:
                 loss_dict = {
                     "Loss": f"{ema_loss_for_log:.{5}f}",
-                    "depth": f"{depth_loss.item():.{4}f}",
-                    "normal": f"{normal_loss.item():.{4}f}",
+                    "depth": f"{depth_loss.item():.2e}",
+                    "normal": f"{normal_loss.item():.2e}",
                 }
                 progress_bar.set_postfix(loss_dict)
                 progress_bar.update(10)
