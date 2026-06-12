@@ -106,10 +106,6 @@ def training(
 
         triangles.update_learning_rate(iteration)
 
-        # Every 1000 its we increase the levels of SH up to a maximum degree
-        if iteration % 1000 == 0:
-            triangles.oneupSHdegree()
-
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
             if not new_round and removed_them:
@@ -157,16 +153,18 @@ def training(
         ##############################################################
         # WE ADD A LOSS FORCING LOW OPACITIES                        #
         ##############################################################
-        loss_image = (1.0 - opt.lambda_dssim) * pixel_loss + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-        #loss_image = 0.0
+        # Geometry-only training: no photometric supervision. Colors are frozen at
+        # initialization, so an RGB loss would only distort the geometry.
+        #loss_image = (1.0 - opt.lambda_dssim) * pixel_loss + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        loss_image = 0.0
 
         # loss opacity
         loss_opacity = torch.abs(triangles.get_opacity).mean() * args.lambda_opacity
 
         # depth / normal supervision (DA3 GT) and distortion
-        lambda_dist = opt.lambda_dist if iteration > opt.iteration_mesh else 0
-        lambda_normal = opt.lambda_normals if iteration > opt.iteration_mesh else 0
-        lambda_depth = opt.lambda_depth if iteration > opt.iteration_mesh else 0
+        lambda_depth = opt.lambda_depth if iteration >= opt.depth_from_iter else 0
+        lambda_dist = opt.lambda_dist if iteration >= opt.dist_from_iter else 0
+        lambda_normal = opt.lambda_normals if iteration >= opt.normal_from_iter else 0
 
         rend_normal = render_pkg["rend_normal"]            # (3, H, W) world space rendered normals
         surf_normal = render_pkg['surf_normal']            # (3, H, W) world space normal from finite differences depth

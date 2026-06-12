@@ -57,7 +57,7 @@ class ParamGroup:
 
 class ModelParams(ParamGroup): 
     def __init__(self, parser, sentinel=False):
-        self.sh_degree = 3
+        self.sh_degree = 0  # geometry-only training: colors are frozen, no SH bands needed
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
@@ -85,9 +85,9 @@ class OptimizationParams(ParamGroup):
         self.iterations = 30_000
         self.position_lr_delay_mult = 0.01
         self.position_lr_max_steps = 30_000
-        self.feature_lr = 0.0025
+        self.feature_lr = 0.0  # geometry-only training: SH color features receive no gradient
         self.opacity_lr = 0.014
-        self.lambda_dssim = 0.2
+        self.lambda_dssim = 0.2  # unused while the RGB loss is disabled in train.py
 
         self.densification_interval = 500
 
@@ -105,17 +105,21 @@ class OptimizationParams(ParamGroup):
 
         self.noise_lr = 5e5
         self.mask_dead = 0.08
-        self.lambda_normals = 0.0001 # 0.0001
-        self.lambda_depth = 0.01
+        # Geometry-only loss weights, see notes/geometry_only_hyperparameters.md
+        self.lambda_normals = 0.05   # rendered-normal vs depth-normal self-consistency (2DGS value)
+        self.lambda_depth = 1.0      # primary supervision, takes the role of the old RGB loss
         self.depth_log_l1_weight = 0.9
         self.depth_pearson_weight = 0.1
         self.depth_pearson_patch_size = 32
-        self.lambda_dist = 0.0
+        self.lambda_dist = 100.0     # depth distortion; 100 for unbounded scenes, 1000 for bounded
         self.lambda_opacity = 0.0055
         self.lambda_size = 0.00000001
         self.opacity_dead = 0.014
         self.importance_threshold = 0.022
-        self.iteration_mesh = 5000
+        # Per-loss start iterations (replaces the old single iteration_mesh gate)
+        self.depth_from_iter = 0
+        self.dist_from_iter = 500
+        self.normal_from_iter = 1500
 
         self.cloning_sigma = 1.0
         self.cloning_opacity = 1.0
