@@ -111,6 +111,7 @@ class OptimizationParams(ParamGroup):
         self.depth_log_l1_weight = 0.9
         self.depth_pearson_weight = 0.1
         self.depth_pearson_patch_size = 32
+        self.depth_min_alpha = 0.1   # exclude pixels with accumulated opacity below this from the depth loss
         self.lambda_dist = 100.0     # depth distortion; 100 for unbounded scenes, 1000 for bounded
         self.lambda_opacity = 0.0055
         self.lambda_size = 0.00000001

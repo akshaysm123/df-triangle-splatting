@@ -179,6 +179,8 @@ def training(
                 log_l1_weight=opt.depth_log_l1_weight,
                 pearson_weight=opt.depth_pearson_weight,
                 patch_size=opt.depth_pearson_patch_size,
+                alpha=render_pkg["rend_alpha"].detach(),
+                min_alpha=opt.depth_min_alpha,
             )
 
         dist_loss = lambda_dist * (rend_dist).mean()
@@ -193,8 +195,27 @@ def training(
         else:
             loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss
 
+        # A single non-finite batch would poison the parameters permanently;
+        # skip the update instead.
+        if not torch.isfinite(loss):
+            print(
+                f"\n[ITER {iteration}] Non-finite loss, skipping update "
+                f"(depth {depth_loss.item():.3e}, normal {normal_loss.item():.3e}, "
+                f"dist {dist_loss.item():.3e})"
+            )
+            triangles.optimizer.zero_grad(set_to_none=True)
+            continue
+
         loss.backward()
-     
+
+        # Safety net against non-finite gradients (degenerate triangles,
+        # near-zero-alpha pixels) that can appear even when the loss is finite.
+        with torch.no_grad():
+            for group in triangles.optimizer.param_groups:
+                for param in group["params"]:
+                    if param.grad is not None:
+                        torch.nan_to_num_(param.grad, nan=0.0, posinf=0.0, neginf=0.0)
+
         iter_end.record()
         
         with torch.no_grad():

@@ -73,7 +73,9 @@ def _pearson_loss_batched(pred, target, weight=None, eps=1e-8):
     cov = (w * pred_c * target_c).sum(dim=-1)
     var_pred = (w * pred_c.pow(2)).sum(dim=-1)
     var_target = (w * target_c.pow(2)).sum(dim=-1)
-    denom = torch.sqrt(var_pred) * torch.sqrt(var_target) + eps
+    # eps inside the sqrt: backward of sqrt(0) is inf, and constant patches
+    # (var = 0) would NaN the whole model even when their weight is zero
+    denom = torch.sqrt(var_pred + eps) * torch.sqrt(var_target + eps)
     return 1.0 - cov / denom
 
 
@@ -168,12 +170,18 @@ def depth_combined_loss(
     log_l1_weight=0.9,
     pearson_weight=0.1,
     patch_size=32,
-    min_depth=1e-6,
-    eps=1e-6,
+    min_depth=1e-3,
+    alpha=None,
+    min_alpha=0.1,
 ):
     """
     Depth supervision: log_l1_weight * log-L1 + pearson_weight * patch Pearson.
     pred, gt: (1, H, W) or (H, W). No confidence weighting.
+
+    alpha: optional (1, H, W) rendered accumulated opacity (pass it detached).
+    Pixels with alpha <= min_alpha are excluded: expected depth there is D/alpha
+    with alpha ~ 0, whose gradient (~1/alpha) explodes and NaNs the model.
+    min_depth also bounds the log-L1 gradient (d|log p|/dp = 1/p <= 1/min_depth).
     """
     pred = _squeeze_hw(pred)
     gt = _squeeze_hw(gt)
@@ -184,15 +192,21 @@ def depth_combined_loss(
         & (gt > min_depth)
         & (pred > min_depth)
     )
+    if alpha is not None:
+        valid = valid & (_squeeze_hw(alpha) > min_alpha)
     log_l1 = pred.new_zeros(())
     if valid.any():
         log_err = torch.abs(
-            torch.log(pred.clamp(min=eps)) - torch.log(gt.clamp(min=eps))
+            torch.log(pred.clamp(min=min_depth)) - torch.log(gt.clamp(min=min_depth))
         )
         log_l1 = log_err[valid].mean()
 
     pearson = pearson_correlation_loss_patches(
-        pred, gt, confidence=None, patch_size=patch_size, min_depth=min_depth
+        pred,
+        gt,
+        confidence=valid.float(),
+        patch_size=patch_size,
+        min_depth=min_depth,
     )
     return log_l1_weight * log_l1 + pearson_weight * pearson
 
