@@ -117,10 +117,12 @@ class OptimizationParams(ParamGroup):
         self.lambda_size = 0.00000001
         self.opacity_dead = 0.014
         self.importance_threshold = 0.022
-        # Per-loss start iterations (replaces the old single iteration_mesh gate)
+        # Per-loss start iterations (replaces the old single iteration_mesh gate).
+        # Tuned for the default 30k schedule; scale down for shorter runs
+        # (e.g. 500 / 1500 for 5k iterations).
         self.depth_from_iter = 0
-        self.dist_from_iter = 500
-        self.normal_from_iter = 1500
+        self.dist_from_iter = 3000
+        self.normal_from_iter = 7000
 
         self.cloning_sigma = 1.0
         self.cloning_opacity = 1.0

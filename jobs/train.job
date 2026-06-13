@@ -21,11 +21,11 @@ conda activate triangle_splatting
     echo -e "\nFinished building, starting training.\n"
 
     SCENE="bicycle"
-    # Schedules tied to the 5000-iteration run: LR decays fully, densification stops
-    # at 80% so the final pruning pass runs. depth_ratio 0 = expected depth
-    # (recommended for unbounded outdoor scenes; use 1 for bounded/indoor).
-    python train.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE --iterations 5000 \
-        --position_lr_max_steps 5000 --densify_until_iter 4000 \
-        --test_iterations 1000 2500 5000 --depth_ratio 0
+    # Full 30k run: the schedule defaults (position_lr_max_steps 30000,
+    # densify_until_iter 25000, test_iterations 7000/30000, dist/normal warmups)
+    # already match. depth_ratio 0 = expected depth (recommended for unbounded
+    # outdoor scenes; use 1 for bounded/indoor).
+    python train.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE \
+        --iterations 30000 --depth_ratio 0
     python render.py -m output/m360/$SCENE --quick
 )
