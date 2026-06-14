@@ -216,6 +216,10 @@ class TriangleModel:
         self.image_size = 0
         self.importance_score = 0
 
+        # Accumulated depth-supervision error attributed to each triangle over a
+        # densification interval. Drives error-aware densification sampling.
+        self.depth_error = 0
+
         self.nb_points = 0
 
         self.large = False
@@ -464,6 +468,7 @@ class TriangleModel:
         self.triangle_area = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
         self.image_size = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
         self.importance_score = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
+        self.depth_error = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
 
     def training_setup(self, training_args, lr_mask, lr_features, lr_opacity, lr_sigma, lr_triangles_points_init):
 
@@ -475,6 +480,9 @@ class TriangleModel:
         self.max_noise_factor = training_args.max_noise_factor
 
         self.add_shape = training_args.add_shape
+
+        # Strength of the depth-error bias in densification sampling (0 = off).
+        self.densify_error_beta = training_args.densify_error_beta
 
         l = [
             {'params': [self._features_dc], 'lr': lr_features, "name": "f_dc"},
@@ -733,13 +741,27 @@ class TriangleModel:
         if num_gs <= 0:
             return 0
 
+        eps = torch.finfo(torch.float32).eps
+
         if oddGroup:
             probs = self.get_opacity.squeeze(-1) 
         else:
-            eps = torch.finfo(torch.float32).eps
             probs = self.get_sigma.squeeze(-1) 
             probs = 1 / (probs + eps)
-            
+
+        # Error-aware densification: multiplicatively boost the base sampling
+        # probability (opacity / sharpness) by the normalized per-triangle depth
+        # error accumulated over the interval. This keeps the "sample where
+        # geometry exists" prior while biasing new triangles toward regions the
+        # depth supervision is fitting badly. beta=0 recovers the original MCMC
+        # behavior. Normalization uses a robust high quantile so a few extreme
+        # triangles do not dominate the whole budget.
+        if getattr(self, "densify_error_beta", 0.0) > 0.0 and torch.is_tensor(self.depth_error):
+            err = self.depth_error
+            scale = torch.quantile(err[err > 0], 0.99) if (err > 0).any() else err.new_tensor(0.0)
+            err_norm = (err / (scale + eps)).clamp(min=0.0, max=1.0)
+            probs = probs * (1.0 + self.densify_error_beta * err_norm)
+
         probs[dead_mask] = 0
 
         compar = self.image_size
@@ -806,12 +828,14 @@ class TriangleModel:
         self.triangle_area = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
         self.image_size = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
         self.importance_score = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
+        self.depth_error = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
 
     def remove_final_points(self, mask):
         self.prune_points(mask)
         self.triangle_area = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
         self.image_size = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
         self.importance_score = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
+        self.depth_error = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
 
 
     def reset_opacity(self, sigma_reset):

@@ -183,6 +183,24 @@ def training(
                 min_alpha=opt.depth_min_alpha,
             )
 
+        # Error-aware densification bookkeeping: attribute each pixel's depth
+        # residual to the triangle that forms the surface there, accumulating it
+        # per triangle over the densification interval. add_new_gs consumes this
+        # buffer to bias sampling toward badly-fit regions, then resets it. We
+        # mirror the depth loss's valid-pixel masking (positive GT, alpha above
+        # threshold) so densification chases the same error the loss optimizes.
+        if opt.densify_error_beta > 0.0 and depth_map is not None and iteration < opt.densify_until_iter:
+            with torch.no_grad():
+                gt_depth_cuda = depth_map.cuda()
+                sid = render_pkg["surface_id"].reshape(-1)              # (H*W,) long, -1 = empty
+                gt_d = gt_depth_cuda.reshape(-1)
+                alpha_flat = render_pkg["rend_alpha"].detach().reshape(-1)
+                per_pixel_err = (surf_depth.detach() - gt_depth_cuda).abs().reshape(-1)
+                # NOTE: to down-weight unreliable pixels later, multiply
+                # per_pixel_err by confidence_map.reshape(-1) here.
+                valid = (sid >= 0) & (gt_d > 0) & (alpha_flat > opt.depth_min_alpha)
+                triangles.depth_error.index_add_(0, sid[valid], per_pixel_err[valid])
+
         dist_loss = lambda_dist * (rend_dist).mean()
         normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None] 
         normal_loss = lambda_normal * (normal_error).mean() # normal consistency loss

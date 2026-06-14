@@ -138,6 +138,11 @@ class OptimizationParams(ParamGroup):
 
         self.add_shape = 1.3 # might need to be changed
 
+        # Error-aware densification: multiplicatively boosts a triangle's
+        # sampling probability by (1 + beta * normalized_depth_error). 0 keeps
+        # the original geometry-prior MCMC sampling; 2-5 is a sensible range.
+        self.densify_error_beta = 0.0
+
         self.p = 1.6
 
         super().__init__(parser, "Optimization Parameters")

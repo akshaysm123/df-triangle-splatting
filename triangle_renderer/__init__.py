@@ -145,6 +145,11 @@ def render(viewpoint_camera, pc : TriangleModel, pipe, bg_color : torch.Tensor, 
     # per-triangle random hue render (same compositing as RGB image)
     render_random_color = allmap[7:10]
 
+    # per-pixel global id of the surface (median) triangle; -1 = background/empty.
+    # Used to attribute per-pixel depth error back onto triangles for
+    # error-aware densification. No gradient flows through this channel.
+    surface_id = allmap[10:11].round().long().detach()
+
     # psedo surface attributes
     # surf depth is either median or expected by setting depth_ratio to 1 or 0
     # for bounded scene, use median depth, i.e., depth_ratio = 1; 
@@ -165,6 +170,7 @@ def render(viewpoint_camera, pc : TriangleModel, pipe, bg_color : torch.Tensor, 
             'rend_random_color': render_random_color,
             'surf_depth': surf_depth,
             'surf_normal': surf_normal,
+            'surface_id': surface_id,
     })
 
     return rets
