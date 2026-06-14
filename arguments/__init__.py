@@ -134,9 +134,10 @@ class OptimizationParams(ParamGroup):
         self.start_lr_sigma = 0
         self.max_noise_factor = 1.5
 
-        self.max_shapes = 4000000
 
-        self.add_shape = 1.3 # might need to be changed
+        # N triangle target and growth rate
+        self.max_shapes = 80_000 # orig: 4M
+        self.add_shape = 1.15 # orig: 1.3
 
         # Error-aware densification: multiplicatively boosts a triangle's
         # sampling probability by (1 + beta * normalized_depth_error). 0 keeps
