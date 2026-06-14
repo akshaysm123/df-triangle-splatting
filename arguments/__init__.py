@@ -108,8 +108,8 @@ class OptimizationParams(ParamGroup):
         # Geometry-only loss weights, see notes/geometry_only_hyperparameters.md
         self.lambda_normals = 0.05   # rendered-normal vs depth-normal self-consistency (2DGS value)
         self.lambda_depth = 1.0      # primary supervision, takes the role of the old RGB loss
-        self.depth_log_l1_weight = 0.0      # .9
-        self.depth_pearson_weight = 1.0     # .1
+        self.depth_log_l1_weight = 0.8      # absolute (log-space) anchor; primary depth term
+        self.depth_pearson_weight = 0.2     # scale/shift-invariant complementary regularizer
         self.depth_pearson_patch_size = 16  # 32
         self.depth_min_alpha = 0.1   # exclude pixels with accumulated opacity below this from the depth loss
         self.lambda_dist = 100.0     # depth distortion; 100 for unbounded scenes, 1000 for bounded
@@ -136,8 +136,8 @@ class OptimizationParams(ParamGroup):
 
 
         # N triangle target and growth rate
-        self.max_shapes = 80_000 # orig: 4M
-        self.add_shape = 1.15 # orig: 1.3
+        self.max_shapes = 1_000_000 # orig: 4M
+        self.add_shape = 1.3 # growth per densification event; orig: 1.3
 
         # Error-aware densification: multiplicatively boosts a triangle's
         # sampling probability by (1 + beta * normalized_depth_error). 0 keeps

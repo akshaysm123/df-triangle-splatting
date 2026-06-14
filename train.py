@@ -255,6 +255,7 @@ def training(
                     "Loss": f"{ema_loss_for_log:.{5}f}",
                     "depth": f"{depth_loss.item():.2e}",
                     "normal": f"{normal_loss.item():.2e}",
+                    "N": f"{triangles.get_triangles_points.shape[0]}",
                 }
                 progress_bar.set_postfix(loss_dict)
                 progress_bar.update(10)
@@ -446,7 +447,7 @@ if __name__ == "__main__":
 
     # Periodic visual monitoring: dump render.py-style extended outputs for the
     # first --vis_frames train views every --vis_interval iterations (0 disables).
-    parser.add_argument("--vis_interval", type=int, default=1000)
+    parser.add_argument("--vis_interval", type=int, default=2500)
     parser.add_argument("--vis_frames", type=int, default=5)
 
     parser.add_argument("--no_dome", action="store_true", default=False)
