@@ -33,6 +33,7 @@ from utils.loss_utils import (
     camera_normals_to_world,
 )
 from triangle_renderer import render
+from render import render_set_extended
 import sys
 from scene import Scene, TriangleModel
 from utils.general_utils import safe_state
@@ -270,6 +271,16 @@ def training(
             if iteration in save_iterations:
                 print("\n[ITER {}] Saving Triangles".format(iteration))
                 scene.save(iteration)
+
+            # Periodically dump the same extended visualizations as render.py
+            # (RGB, GT, depth colormap, normals, random-color) for the first few
+            # train views, so training can be monitored visually over time.
+            if args.vis_frames > 0 and iteration % args.vis_interval == 0:
+                vis_views = scene.getTrainCameras()[: args.vis_frames]
+                render_set_extended(
+                    dataset.model_path, "training_vis", iteration,
+                    vis_views, triangles, pipe, background, quick=False,
+                )
             if iteration % 1000 == 0:
                 total_dead = 0
 
@@ -432,6 +443,11 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+
+    # Periodic visual monitoring: dump render.py-style extended outputs for the
+    # first --vis_frames train views every --vis_interval iterations (0 disables).
+    parser.add_argument("--vis_interval", type=int, default=1000)
+    parser.add_argument("--vis_frames", type=int, default=5)
 
     parser.add_argument("--no_dome", action="store_true", default=False)
     parser.add_argument("--outdoor", action="store_true", default=False)
