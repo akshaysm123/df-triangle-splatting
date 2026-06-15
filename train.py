@@ -28,11 +28,12 @@ from utils.loss_utils import (
     ssim,
     equilateral_regularizer,
     l2_loss,
-    depth_supervision_loss,
+    depth_combined_loss,
     normal_supervision_loss,
     camera_normals_to_world,
 )
 from triangle_renderer import render
+from render import render_set_extended
 import sys
 from scene import Scene, TriangleModel
 from utils.general_utils import safe_state
@@ -106,10 +107,6 @@ def training(
 
         triangles.update_learning_rate(iteration)
 
-        # Every 1000 its we increase the levels of SH up to a maximum degree
-        if iteration % 1000 == 0:
-            triangles.oneupSHdegree()
-
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
             if not new_round and removed_them:
@@ -157,47 +154,97 @@ def training(
         ##############################################################
         # WE ADD A LOSS FORCING LOW OPACITIES                        #
         ##############################################################
-        loss_image = (1.0 - opt.lambda_dssim) * pixel_loss + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        # Geometry-only training: no photometric supervision. Colors are frozen at
+        # initialization, so an RGB loss would only distort the geometry.
+        #loss_image = (1.0 - opt.lambda_dssim) * pixel_loss + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        loss_image = 0.0
 
         # loss opacity
         loss_opacity = torch.abs(triangles.get_opacity).mean() * args.lambda_opacity
 
         # depth / normal supervision (DA3 GT) and distortion
-        lambda_dist = opt.lambda_dist #if iteration > opt.iteration_mesh else 0
-        lambda_normal = opt.lambda_normals #if iteration > opt.iteration_mesh else 0
-        lambda_depth = opt.lambda_depth #if iteration > opt.iteration_mesh else 0
+        lambda_depth = opt.lambda_depth if iteration >= opt.depth_from_iter else 0
+        lambda_dist = opt.lambda_dist if iteration >= opt.dist_from_iter else 0
+        lambda_normal = opt.lambda_normals if iteration >= opt.normal_from_iter else 0
 
-        rend_dist = render_pkg["rend_dist"]                # (1, H, W) depth distortion map
-        dist_loss = lambda_dist * (rend_dist).mean()
-
+        rend_normal = render_pkg["rend_normal"]            # (3, H, W) world space rendered normals
+        surf_normal = render_pkg['surf_normal']            # (3, H, W) world space normal from finite differences depth
         surf_depth = render_pkg["surf_depth"]              # (1, H, W) camera-space surface depth
-        rend_normal = render_pkg["rend_normal"]            # (3, H, W) world-space rendered normals
+        rend_dist = render_pkg["rend_dist"]                # (1, H, W) depth distortion map
 
         depth_loss = surf_depth.new_zeros(())
-        normal_loss = surf_depth.new_zeros(())
-        if lambda_depth > 0:
-            depth_loss = lambda_depth * depth_supervision_loss(
-                surf_depth, depth_map, confidence_map
+        if lambda_depth > 0 and depth_map is not None:
+            depth_loss = lambda_depth * depth_combined_loss(
+                surf_depth,
+                depth_map.cuda(),
+                log_l1_weight=opt.depth_log_l1_weight,
+                pearson_weight=opt.depth_pearson_weight,
+                patch_size=opt.depth_pearson_patch_size,
+                alpha=render_pkg["rend_alpha"].detach(),
+                min_alpha=opt.depth_min_alpha,
             )
-        if lambda_normal > 0:
-            gt_normal_world = camera_normals_to_world(
-                normal_map, viewpoint_cam.world_view_transform
-            )
-            normal_loss = lambda_normal * normal_supervision_loss(
-                rend_normal, gt_normal_world, confidence_map
-            )
+
+        # Error-aware densification bookkeeping: attribute each pixel's depth
+        # residual to the triangle that forms the surface there, accumulating it
+        # per triangle over the densification interval. add_new_gs consumes this
+        # buffer to bias sampling toward badly-fit regions, then resets it. We
+        # mirror the depth loss's valid-pixel masking (positive GT, alpha above
+        # threshold) so densification chases genuinely badly-fit geometry.
+        #
+        # The residual is the absolute LOG-ratio |log(pred) - log(gt)| rather than
+        # the raw |pred - gt|. Raw error scales with absolute depth, so it is
+        # dominated by distant geometry and re-introduces exactly the distance
+        # blow-up that a scale-invariant (e.g. Pearson-only) depth loss is meant
+        # to avoid; the log-ratio is distance-robust and bounded by min_depth.
+        if opt.densify_error_beta > 0.0 and depth_map is not None and iteration < opt.densify_until_iter:
+            with torch.no_grad():
+                gt_depth_cuda = depth_map.cuda()
+                sid = render_pkg["surface_id"].reshape(-1)              # (H*W,) long, -1 = empty
+                gt_d = gt_depth_cuda.reshape(-1)
+                alpha_flat = render_pkg["rend_alpha"].detach().reshape(-1)
+                # min_depth bounds the log gradient/value; matches depth_combined_loss's default.
+                min_depth = 1e-3
+                pred_d = surf_depth.detach().reshape(-1).clamp(min=min_depth)
+                gt_clamped = gt_d.clamp(min=min_depth)
+                per_pixel_err = (torch.log(pred_d) - torch.log(gt_clamped)).abs()
+                # NOTE: to down-weight unreliable pixels later, multiply
+                # per_pixel_err by confidence_map.reshape(-1) here.
+                valid = (sid >= 0) & (gt_d > 0) & (alpha_flat > opt.depth_min_alpha)
+                triangles.depth_error.index_add_(0, sid[valid], per_pixel_err[valid])
+
+        dist_loss = lambda_dist * (rend_dist).mean()
+        normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None] 
+        normal_loss = lambda_normal * (normal_error).mean() # normal consistency loss
 
         loss_size = 1 / equilateral_regularizer(triangles.get_triangles_points).mean() 
         loss_size = loss_size * opt.lambda_size
-
 
         if iteration < opt.densify_until_iter:
             loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss + loss_size
         else:
             loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss
 
+        # A single non-finite batch would poison the parameters permanently;
+        # skip the update instead.
+        if not torch.isfinite(loss):
+            print(
+                f"\n[ITER {iteration}] Non-finite loss, skipping update "
+                f"(depth {depth_loss.item():.3e}, normal {normal_loss.item():.3e}, "
+                f"dist {dist_loss.item():.3e})"
+            )
+            triangles.optimizer.zero_grad(set_to_none=True)
+            continue
+
         loss.backward()
-     
+
+        # Safety net against non-finite gradients (degenerate triangles,
+        # near-zero-alpha pixels) that can appear even when the loss is finite.
+        with torch.no_grad():
+            for group in triangles.optimizer.param_groups:
+                for param in group["params"]:
+                    if param.grad is not None:
+                        torch.nan_to_num_(param.grad, nan=0.0, posinf=0.0, neginf=0.0)
+
         iter_end.record()
         
         with torch.no_grad():
@@ -206,8 +253,9 @@ def training(
             if iteration % 10 == 0:
                 loss_dict = {
                     "Loss": f"{ema_loss_for_log:.{5}f}",
-                    "depth": f"{depth_loss.item():.{4}f}",
-                    "normal": f"{normal_loss.item():.{4}f}",
+                    "depth": f"{depth_loss.item():.2e}",
+                    "normal": f"{normal_loss.item():.2e}",
+                    "N": f"{triangles.get_triangles_points.shape[0]}",
                 }
                 progress_bar.set_postfix(loss_dict)
                 progress_bar.update(10)
@@ -219,11 +267,21 @@ def training(
             training_report(
                 tb_writer, iteration, pixel_loss, loss, loss_fn,
                 iter_start.elapsed_time(iter_end), testing_iterations, scene, render,
-                (pipe, background), depth_loss, normal_loss,
+                (pipe, background), depth_loss=depth_loss, normal_loss=normal_loss,
             )
             if iteration in save_iterations:
                 print("\n[ITER {}] Saving Triangles".format(iteration))
                 scene.save(iteration)
+
+            # Periodically dump the same extended visualizations as render.py
+            # (RGB, GT, depth colormap, normals, random-color) for the first few
+            # train views, so training can be monitored visually over time.
+            if args.vis_frames > 0 and iteration % args.vis_interval == 0:
+                vis_views = scene.getTrainCameras()[: args.vis_frames]
+                render_set_extended(
+                    dataset.model_path, "training_vis", iteration,
+                    vis_views, triangles, pipe, background, quick=False,
+                )
             if iteration % 1000 == 0:
                 total_dead = 0
 
@@ -386,6 +444,11 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+
+    # Periodic visual monitoring: dump render.py-style extended outputs for the
+    # first --vis_frames train views every --vis_interval iterations (0 disables).
+    parser.add_argument("--vis_interval", type=int, default=2500)
+    parser.add_argument("--vis_frames", type=int, default=5)
 
     parser.add_argument("--no_dome", action="store_true", default=False)
     parser.add_argument("--outdoor", action="store_true", default=False)

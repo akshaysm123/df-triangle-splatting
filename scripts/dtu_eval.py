@@ -12,9 +12,10 @@ parser.add_argument("--output_path", default="./eval/dtu")
 parser.add_argument('--dtu', "-dtu", required=True, type=str)
 
 parser.add_argument('--max_shapes', default=500000, type=int)
-parser.add_argument('--lambda_normals', default=0.0028, type=float)
-parser.add_argument('--lambda_dist', default=0.014, type=float)
-parser.add_argument('--iteration_mesh', default=25000, type=int)
+parser.add_argument('--lambda_normals', default=0.05, type=float)
+parser.add_argument('--lambda_dist', default=1000.0, type=float)  # DTU is bounded
+parser.add_argument('--dist_from_iter', default=3000, type=int)
+parser.add_argument('--normal_from_iter', default=7000, type=int)
 parser.add_argument('--densify_until_iter', default=25000, type=int)
 parser.add_argument('--lambda_opacity', default=0.0044, type=float)
 parser.add_argument('--importance_threshold', default=0.027, type=float)
@@ -35,7 +36,8 @@ if not args.skip_training:
         f" --test_iterations -1 --depth_ratio 1.0 -r 2 --eval --max_shapes {args.max_shapes}"
         f" --lambda_normals {args.lambda_normals}"
         f" --lambda_dist {args.lambda_dist}"
-        f" --iteration_mesh {args.iteration_mesh}"
+        f" --dist_from_iter {args.dist_from_iter}"
+        f" --normal_from_iter {args.normal_from_iter}"
         f" --densify_until_iter {args.densify_until_iter}"
         f" --lambda_opacity {args.lambda_opacity}"
         f" --importance_threshold {args.importance_threshold}"

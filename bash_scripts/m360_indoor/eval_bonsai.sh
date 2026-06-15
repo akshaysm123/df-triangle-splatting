@@ -23,7 +23,8 @@ python train.py \
 --opacity_lr 0.014 \
 --lambda_normals 0.00004 \
 --lambda_dist 1 \
---iteration_mesh 5000 \
+--dist_from_iter 5000 \
+--normal_from_iter 5000 \
 --lambda_opacity 0.0055 \
 --lambda_dssim 0.4 \
 --lr_triangles_points_init 0.0015 \

@@ -133,8 +133,10 @@ def render(viewpoint_camera, pc : TriangleModel, pipe, bg_color : torch.Tensor, 
     render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
 
     # get expected depth map
+    # clamp the alpha normalization: as alpha -> 0 the quotient and its gradient
+    # (~1/alpha) blow up, which can NaN training through the depth/normal losses
     render_depth_expected = allmap[0:1]
-    render_depth_expected = (render_depth_expected / render_alpha)
+    render_depth_expected = (render_depth_expected / render_alpha.clamp(min=1e-3))
     render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)
     
     # get depth distortion map
@@ -142,6 +144,11 @@ def render(viewpoint_camera, pc : TriangleModel, pipe, bg_color : torch.Tensor, 
 
     # per-triangle random hue render (same compositing as RGB image)
     render_random_color = allmap[7:10]
+
+    # per-pixel global id of the surface (median) triangle; -1 = background/empty.
+    # Used to attribute per-pixel depth error back onto triangles for
+    # error-aware densification. No gradient flows through this channel.
+    surface_id = allmap[10:11].round().long().detach()
 
     # psedo surface attributes
     # surf depth is either median or expected by setting depth_ratio to 1 or 0
@@ -163,6 +170,7 @@ def render(viewpoint_camera, pc : TriangleModel, pipe, bg_color : torch.Tensor, 
             'rend_random_color': render_random_color,
             'surf_depth': surf_depth,
             'surf_normal': surf_normal,
+            'surface_id': surface_id,
     })
 
     return rets
