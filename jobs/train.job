@@ -20,17 +20,20 @@ conda activate triangle_splatting
     popd
     echo -e "\nFinished building, starting training.\n"
 
-    SCENE="bicycle"
     # Full 30k run: the schedule defaults (position_lr_max_steps 30000,
     # densify_until_iter 25000, test_iterations 7000/30000, dist/normal warmups)
     # already match. depth_ratio 0 = expected depth (recommended for unbounded
     # outdoor scenes; use 1 for bounded/indoor).
-    python train.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE \
-        --iterations 30000 \
-        --depth_ratio 0.8 \
-        --densify_error_beta 3.0 \
-        --densify_normal_beta 3.0 \
-        --split_normal_threshold 0.5 \
-        --outdoor
+    
+    #SCENE="bicycle"
+    for SCENE in garden kitchen bonsai; do
+        python train.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE \
+            --iterations 30000 \
+            --depth_ratio 0.5 \
+            --densify_error_beta 3.0 \
+            --densify_normal_beta 3.0 \
+            --split_normal_threshold 0.5 \
+            --outdoor
+    done
     # python render.py -m output/m360/$SCENE --quick
 )
