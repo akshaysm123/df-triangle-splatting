@@ -128,7 +128,12 @@ class OptimizationParams(ParamGroup):
         self.depth_from_frac = 0.0
         self.normal_from_frac = 0.233     # ~7k / 30k
         # Fraction before which area/size-based pruning stays disabled (warmup).
-        self.prune_warmup_frac = 0.033    # ~1k / 30k
+        # NOTE: must resolve to >= the first densification iteration (1000 on the
+        # 30k schedule). 0.033 rounded to 990, which switched on the
+        # `triangle_area < 2` prune at the very first densification (iter 1000),
+        # before triangles accumulate area, wiping the whole model. 0.0334 keeps
+        # area pruning deferred to the second densification (1500) as before.
+        self.prune_warmup_frac = 0.0334   # ~1k / 30k (resolves to 1002 @ 30k)
         # Optional absolute overrides (-1 = use the *_frac above).
         self.depth_from_iter = -1
         self.normal_from_iter = -1
