@@ -84,15 +84,21 @@ class OptimizationParams(ParamGroup):
     def __init__(self, parser):
         self.iterations = 30_000
         self.position_lr_delay_mult = 0.01
-        self.position_lr_max_steps = 30_000
+        self.position_lr_max_steps = -1  # -1 = match --iterations (resolved in train.py)
         self.feature_lr = 0.0  # geometry-only training: SH color features receive no gradient
         self.opacity_lr = 0.014
         self.lambda_dssim = 0.2  # unused while the RGB loss is disabled in train.py
 
         self.densification_interval = 500
 
-        self.densify_from_iter = 500
-        self.densify_until_iter = 25000
+        # Densification window as fractions of total iterations, resolved against
+        # --iterations in train.py so the schedule scales with run length.
+        self.densify_from_frac = 0.0167   # ~500 / 30k
+        self.densify_until_frac = 0.833   # ~25k / 30k
+        # Optional absolute overrides (-1 = use the *_frac above). Kept so scripts
+        # that still pass --densify_from_iter / --densify_until_iter keep working.
+        self.densify_from_iter = -1
+        self.densify_until_iter = -1
 
         self.random_background = False
         self.mask_threshold = 0.01
@@ -112,17 +118,28 @@ class OptimizationParams(ParamGroup):
         self.depth_pearson_weight = 0.2     # scale/shift-invariant complementary regularizer
         self.depth_pearson_patch_size = 16  # 32
         self.depth_min_alpha = 0.1   # exclude pixels with accumulated opacity below this from the depth loss
-        self.lambda_dist = 100.0     # depth distortion; 100 for unbounded scenes, 1000 for bounded
+        self.lambda_dist = 50.0      # peak depth-distortion weight (annealed up to this, see below)
         self.lambda_opacity = 0.0055
         self.lambda_size = 0.00000001
         self.opacity_dead = 0.014
         self.importance_threshold = 0.022
-        # Per-loss start iterations (replaces the old single iteration_mesh gate).
-        # Tuned for the default 30k schedule; scale down for shorter runs
-        # (e.g. 500 / 1500 for 5k iterations).
-        self.depth_from_iter = 0
-        self.dist_from_iter = 3000
-        self.normal_from_iter = 7000
+        # Per-loss start points as fractions of total iterations (resolved against
+        # --iterations in train.py), replacing the old single iteration_mesh gate.
+        self.depth_from_frac = 0.0
+        self.normal_from_frac = 0.233     # ~7k / 30k
+        # Fraction before which area/size-based pruning stays disabled (warmup).
+        self.prune_warmup_frac = 0.033    # ~1k / 30k
+        # Optional absolute overrides (-1 = use the *_frac above).
+        self.depth_from_iter = -1
+        self.normal_from_iter = -1
+        # Distortion annealing (fractions of total iterations): the distortion
+        # weight is 0 before dist_anneal_start, ramps linearly to lambda_dist
+        # between start and end, and stays at lambda_dist afterwards. Annealing
+        # lets fine structure form before distortion compacts it onto single
+        # surfaces. Set dist_anneal_end <= dist_anneal_start for a hard switch.
+        self.dist_anneal_start = 0.15
+        self.dist_anneal_end = 0.85
+        self.dist_from_iter = 3000   # DEPRECATED, unused (kept for CLI back-compat)
 
         self.cloning_sigma = 1.0
         self.cloning_opacity = 1.0

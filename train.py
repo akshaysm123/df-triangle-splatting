@@ -65,6 +65,20 @@ def training(
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
 
+    # Resolve the relative (fraction-of-iterations) schedule into absolute iteration
+    # counts so the same config scales with --iterations. An absolute *_iter
+    # override >= 0 takes precedence over its *_frac default; -1 = use the fraction.
+    def _sched(absolute, frac):
+        return int(absolute) if absolute is not None and absolute >= 0 else int(round(frac * opt.iterations))
+
+    opt.depth_from_iter = _sched(opt.depth_from_iter, opt.depth_from_frac)
+    opt.normal_from_iter = _sched(opt.normal_from_iter, opt.normal_from_frac)
+    opt.densify_from_iter = _sched(opt.densify_from_iter, opt.densify_from_frac)
+    opt.densify_until_iter = _sched(opt.densify_until_iter, opt.densify_until_frac)
+    prune_warmup_iter = int(round(opt.prune_warmup_frac * opt.iterations))
+    if opt.position_lr_max_steps is None or opt.position_lr_max_steps < 0:
+        opt.position_lr_max_steps = opt.iterations
+
     # Load parameters, triangles and scene
     triangles = TriangleModel(dataset.sh_degree)
     scene = Scene(dataset, triangles, opt.set_opacity, opt.triangle_size, opt.nb_points, opt.set_sigma, no_dome)
@@ -164,8 +178,21 @@ def training(
 
         # depth / normal supervision (DA3 GT) and distortion
         lambda_depth = opt.lambda_depth if iteration >= opt.depth_from_iter else 0
-        lambda_dist = opt.lambda_dist if iteration >= opt.dist_from_iter else 0
         lambda_normal = opt.lambda_normals if iteration >= opt.normal_from_iter else 0
+
+        # Distortion weight is annealed: 0 before dist_anneal_start, ramped
+        # linearly to lambda_dist by dist_anneal_end, then held constant. This
+        # lets thin structure form before distortion compacts it onto a single
+        # surface per ray.
+        dist_start_iter = opt.dist_anneal_start * opt.iterations
+        dist_end_iter = opt.dist_anneal_end * opt.iterations
+        if iteration < dist_start_iter:
+            lambda_dist = 0.0
+        elif iteration >= dist_end_iter:
+            lambda_dist = opt.lambda_dist
+        else:
+            ramp = (iteration - dist_start_iter) / (dist_end_iter - dist_start_iter)
+            lambda_dist = ramp * opt.lambda_dist
 
         rend_normal = render_pkg["rend_normal"]            # (3, H, W) world space rendered normals
         surf_normal = render_pkg['surf_normal']            # (3, H, W) world space normal from finite differences depth
@@ -295,7 +322,7 @@ def training(
                     else:
                         dead_mask = (triangles.get_opacity <= args.opacity_dead).squeeze()
 
-                if iteration > 1000 and not new_round:
+                if iteration > prune_warmup_iter and not new_round:
                     mask_test = triangles.triangle_area < 2
                     dead_mask = torch.logical_or(dead_mask, mask_test.squeeze())
                     
@@ -439,8 +466,10 @@ if __name__ == "__main__":
     pp = PipelineParams(parser)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    # Defaults are relative to --iterations (resolved below): ~23% and 100% of the
+    # run, matching the original 7k/30k points. Pass explicit values to override.
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=None)
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=None)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -454,6 +483,10 @@ if __name__ == "__main__":
     parser.add_argument("--outdoor", action="store_true", default=False)
     
     args = parser.parse_args(sys.argv[1:])
+    if args.test_iterations is None:
+        args.test_iterations = [int(round(7.0 / 30.0 * args.iterations)), args.iterations]
+    if args.save_iterations is None:
+        args.save_iterations = [int(round(7.0 / 30.0 * args.iterations)), args.iterations]
     args.save_iterations.append(args.iterations)
 
     print("Optimizing " + args.model_path)
