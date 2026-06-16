@@ -133,7 +133,7 @@ class OptimizationParams(ParamGroup):
         # `triangle_area < 2` prune at the very first densification (iter 1000),
         # before triangles accumulate area, wiping the whole model. 0.0334 keeps
         # area pruning deferred to the second densification (1500) as before.
-        self.prune_warmup_frac = 0.0334   # ~1k / 30k (resolves to 1002 @ 30k)
+        self.prune_warmup_frac = 0.035   # ~1k / 30k (resolves to 1002 @ 30k)
         # Optional absolute overrides (-1 = use the *_frac above).
         self.depth_from_iter = -1
         self.normal_from_iter = -1
