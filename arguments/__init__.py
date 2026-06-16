@@ -120,7 +120,7 @@ class OptimizationParams(ParamGroup):
         self.depth_min_alpha = 0.1   # exclude pixels with accumulated opacity below this from the depth loss
         self.lambda_dist = 50.0      # peak depth-distortion weight (annealed up to this, see below)
         self.lambda_opacity = 0.0055
-        self.lambda_size = 0.00000001
+        self.lambda_size = 0.000001 # 0.00000001
         self.opacity_dead = 0.014
         self.importance_threshold = 0.022
         # Per-loss start points as fractions of total iterations (resolved against
@@ -165,6 +165,26 @@ class OptimizationParams(ParamGroup):
         # sampling probability by (1 + beta * normalized_depth_error). 0 keeps
         # the original geometry-prior MCMC sampling; 2-5 is a sensible range.
         self.densify_error_beta = 0.0
+
+        # Structure-aware densification: a second, independent multiplicative
+        # boost (1 + beta * normalized_normal_error) using the per-triangle MEAN
+        # angular error between the rendered surface normal and the GT
+        # (DA3-depth-derived) normal. Complements densify_error_beta: depth error
+        # is numb where the mean depth is already right but the shape is wrong
+        # (thin structures in a narrow depth band), whereas the normal error
+        # stays high there. 0 disables it; 2-5 is a sensible range.
+        self.densify_normal_beta = 0.0
+
+        # Error-gated split-vs-clone routing. By default a sampled
+        # parent is split (subdivided into 4) iff its screen extent exceeds
+        # split_size. With this > 0, splitting additionally requires the
+        # triangle's normalized mean normal error to exceed the threshold, so
+        # well-fit large triangles (floors/walls) are cloned instead of being
+        # force-subdivided, while curved/detailed surfaces are still refined in
+        # place. split_size is then only a mechanical floor (never split
+        # sub-pixel triangles). Range (0, 1]; 0 keeps the pure screen-size rule.
+        # Requires the normal channel to be populated (densify_normal_beta > 0).
+        self.split_normal_threshold = 0.0
 
         self.p = 1.6
 

@@ -239,6 +239,43 @@ def training(
                 valid = (sid >= 0) & (gt_d > 0) & (alpha_flat > opt.depth_min_alpha)
                 triangles.depth_error.index_add_(0, sid[valid], per_pixel_err[valid])
 
+        # Structure-aware densification bookkeeping: attribute each pixel's
+        # SUPERVISED normal error to its surface triangle. This is the second,
+        # independent channel of the combined densification signal (the first is
+        # the depth-error channel above). We compare the rendered surface normal
+        # against the GT normal (DA3 depth's gradient, mapped camera->world to
+        # match the renderer's frame), i.e. the angular error of
+        # normal_supervision_loss but kept per-pixel.
+        #
+        # We accumulate the SUM of per-pixel error plus a per-triangle pixel
+        # count; add_new_gs divides them into a size-independent MEAN.
+        if opt.densify_normal_beta > 0.0 and normal_map is not None and iteration < opt.densify_until_iter:
+            with torch.no_grad():
+                sid = render_pkg["surface_id"].reshape(-1)              # (H*W,) long, -1 = empty
+                # GT normals are stored in camera space; map to world to match rend_normal.
+                gt_normal_world = camera_normals_to_world(
+                    normal_map.cuda(), viewpoint_cam.world_view_transform
+                )
+                rn = torch.nn.functional.normalize(rend_normal.detach(), dim=0, eps=1e-8)
+                gn = torch.nn.functional.normalize(gt_normal_world, dim=0, eps=1e-8)
+                per_pixel_nrm = (1.0 - (rn * gn).sum(dim=0)).clamp(min=0.0).reshape(-1)
+                alpha_flat = render_pkg["rend_alpha"].detach().reshape(-1)
+                conf_flat = (
+                    confidence_map.cuda().reshape(-1)
+                    if confidence_map is not None
+                    else torch.ones_like(per_pixel_nrm)
+                )
+                valid = (
+                    (sid >= 0)
+                    & torch.isfinite(per_pixel_nrm)
+                    & (conf_flat > 0)
+                    & (alpha_flat > opt.depth_min_alpha)
+                )
+                triangles.normal_error.index_add_(0, sid[valid], per_pixel_nrm[valid])
+                triangles.normal_error_count.index_add_(
+                    0, sid[valid], torch.ones_like(per_pixel_nrm[valid])
+                )
+
         dist_loss = lambda_dist * (rend_dist).mean()
         normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None] 
         normal_loss = lambda_normal * (normal_error).mean() # normal consistency loss

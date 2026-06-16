@@ -220,6 +220,13 @@ class TriangleModel:
         # densification interval. Drives error-aware densification sampling.
         self.depth_error = 0
 
+        # Accumulated supervised normal error (sum of per-pixel angular error
+        # 1 - cos(rendered_normal, GT_normal)) and the per-triangle pixel count,
+        # used to form a per-triangle MEAN angular error for structure-aware
+        # densification sampling.
+        self.normal_error = 0
+        self.normal_error_count = 0
+
         self.nb_points = 0
 
         self.large = False
@@ -469,6 +476,8 @@ class TriangleModel:
         self.image_size = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
         self.importance_score = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
         self.depth_error = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
+        self.normal_error = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
+        self.normal_error_count = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
 
     def training_setup(self, training_args, lr_mask, lr_features, lr_opacity, lr_sigma, lr_triangles_points_init):
 
@@ -483,6 +492,11 @@ class TriangleModel:
 
         # Strength of the depth-error bias in densification sampling (0 = off).
         self.densify_error_beta = training_args.densify_error_beta
+        # Strength of the supervised-normal-error bias in sampling (0 = off).
+        self.densify_normal_beta = training_args.densify_normal_beta
+        # Normalized-normal-error threshold for error-gated splitting (0 = off,
+        # i.e. route split-vs-clone purely by screen size as before).
+        self.split_normal_threshold = training_args.split_normal_threshold
 
         l = [
             {'params': [self._features_dc], 'lr': lr_features, "name": "f_dc"},
@@ -762,16 +776,58 @@ class TriangleModel:
             err_norm = (err / (scale + eps)).clamp(min=0.0, max=1.0)
             probs = probs * (1.0 + self.densify_error_beta * err_norm)
 
+        # Structure-aware boost: an INDEPENDENT factor from the supervised normal
+        # error, so a triangle can be selected by either channel on its own. This
+        # is the key to capturing thin structure: such regions sit in a narrow
+        # depth band, so their depth error (and thus err_norm) is ~0 even when
+        # their shape is wrong; the normal error stays high and carries them. We
+        # use the per-triangle MEAN angular error (sum / pixel-count), which is
+        # size-independent, so small thin-structure triangles are not drowned by
+        # the way the summed depth error favors large triangles.
+        if getattr(self, "densify_normal_beta", 0.0) > 0.0 and torch.is_tensor(self.normal_error):
+            cnt = self.normal_error_count.clamp(min=1.0)
+            nrm = self.normal_error / cnt
+            scale = torch.quantile(nrm[nrm > 0], 0.99) if (nrm > 0).any() else nrm.new_tensor(0.0)
+            nrm_norm = (nrm / (scale + eps)).clamp(min=0.0, max=1.0)
+            probs = probs * (1.0 + self.densify_normal_beta * nrm_norm)
+
         probs[dead_mask] = 0
 
         compar = self.image_size
-        big_mask   = compar > self.split_size
+        # Mechanical floor: subdividing a sub-pixel triangle yields children that
+        # the triangle_area<2 prune kills immediately, so splitting always
+        # requires the screen extent to clear split_size first.
+        size_ok = compar > self.split_size
+
+        # Split-vs-clone routing.
+        #  - Original behavior (split_normal_threshold == 0): route purely by
+        #    screen size -- any sampled parent above split_size is subdivided.
+        #  - Error-gated (option E, split_normal_threshold > 0): a parent is
+        #    split only if it is BOTH large enough (size_ok) AND covers a
+        #    structurally-misfit region (normalized mean supervised normal error
+        #    above the threshold); otherwise it is cloned. This stops well-fit
+        #    large triangles (floors/walls) from being force-subdivided while
+        #    still refining curved/detailed surfaces in place. Falls back to the
+        #    screen-size rule when the normal channel carries no signal.
+        use_error_gate = (
+            getattr(self, "split_normal_threshold", 0.0) > 0.0
+            and torch.is_tensor(self.normal_error)
+            and bool((self.normal_error > 0).any())
+        )
+        if use_error_gate:
+            cnt = self.normal_error_count.clamp(min=1.0)
+            nrm = self.normal_error / cnt
+            scale = torch.quantile(nrm[nrm > 0], 0.99) if (nrm > 0).any() else nrm.new_tensor(0.0)
+            nrm_norm = (nrm / (scale + eps)).clamp(min=0.0, max=1.0)
+            big_mask = size_ok & (nrm_norm > self.split_normal_threshold)
+        else:
+            big_mask = size_ok
 
         add_idx = self._sample_alives(probs=probs, num=num_gs, big_mask=big_mask)
 
-        big_mask   = compar[add_idx] > self.split_size
-        small_mask = ~big_mask
-        big_indices   = add_idx[big_mask]
+        big_mask_sel  = big_mask[add_idx]
+        small_mask = ~big_mask_sel
+        big_indices   = add_idx[big_mask_sel]
         small_indices = add_idx[small_mask]
 
         num_big = big_indices.shape[0]
@@ -829,6 +885,8 @@ class TriangleModel:
         self.image_size = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
         self.importance_score = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
         self.depth_error = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
+        self.normal_error = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
+        self.normal_error_count = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
 
     def remove_final_points(self, mask):
         self.prune_points(mask)
@@ -836,6 +894,8 @@ class TriangleModel:
         self.image_size = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
         self.importance_score = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
         self.depth_error = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
+        self.normal_error = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
+        self.normal_error_count = torch.zeros((self.get_triangles_points.shape[0]), device="cuda")
 
 
     def reset_opacity(self, sigma_reset):
