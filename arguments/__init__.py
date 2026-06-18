@@ -120,7 +120,7 @@ class OptimizationParams(ParamGroup):
         self.depth_min_alpha = 0.1   # exclude pixels with accumulated opacity below this from the depth loss
         self.lambda_dist = 50.0      # peak depth-distortion weight (annealed up to this, see below)
         self.lambda_opacity = 0.0055
-        self.lambda_size = 0.000001 # 0.00000001
+        self.lambda_size = 0.00000001 # 0.00000001
         self.opacity_dead = 0.014
         self.importance_threshold = 0.022
         # Per-loss start points as fractions of total iterations (resolved against
