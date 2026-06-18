@@ -30,7 +30,7 @@ conda activate triangle_splatting
     for SCENE in garden; do
         python train.py -s $HOME/mipnerf/$SCENE -m output/m360/$SCENE \
             --iterations 30000 \
-            --depth_ratio 0.75 \
+            --depth_ratio 0.9 \
             --densify_error_beta 3.0 \
             --densify_normal_beta 3.0 \
             --split_normal_threshold 0.5 \
