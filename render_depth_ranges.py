@@ -110,5 +110,5 @@ if __name__ == "__main__":
         args.skip_train,
         args.skip_test,
         args.quick,
-        args.output_dir,
+        getattr(args, "output_dir", None),
     )
