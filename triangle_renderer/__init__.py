@@ -150,6 +150,11 @@ def render(viewpoint_camera, pc : TriangleModel, pipe, bg_color : torch.Tensor, 
     # error-aware densification. No gradient flows through this channel.
     surface_id = allmap[10:11].round().long().detach()
 
+    # Depth of the primitive that first pushes remaining transmittance below 0.05 / 0.95.
+    # 0 marks pixels where that threshold was never reached.
+    depth_transmittance_05 = allmap[11:12]
+    depth_transmittance_95 = allmap[12:13]
+
     # psedo surface attributes
     # surf depth is either median or expected by setting depth_ratio to 1 or 0
     # for bounded scene, use median depth, i.e., depth_ratio = 1; 
@@ -171,6 +176,8 @@ def render(viewpoint_camera, pc : TriangleModel, pipe, bg_color : torch.Tensor, 
             'surf_depth': surf_depth,
             'surf_normal': surf_normal,
             'surface_id': surface_id,
+            'depth_transmittance_05': depth_transmittance_05,
+            'depth_transmittance_95': depth_transmittance_95,
     })
 
     return rets

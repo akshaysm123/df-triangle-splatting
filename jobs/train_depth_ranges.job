@@ -1,0 +1,41 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --job-name=dftri_depth
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=18
+#SBATCH --time=01:30:00
+#SBATCH --output=output/DFTRI_output%A.out
+
+set -e
+source $HOME/miniconda3/start1260.sh
+conda activate triangle_splatting
+(
+    cd $HOME/df-triangle-splatting
+
+    # rebuild
+    pushd submodules/diff-triangle-rasterization/
+    pip install --no-build-isolation --upgrade .
+    popd
+    echo -e "\nFinished building, starting training.\n"
+
+    ITERATIONS=30000
+    #  bicycle kitchen bonsai
+    for SCENE in garden; do
+        MODEL=output/m360/$SCENE
+
+        python train.py -s $HOME/mipnerf/$SCENE -m $MODEL \
+            --iterations $ITERATIONS \
+            --depth_ratio 0.5 \
+            --densify_error_beta 3.0 \
+            --densify_normal_beta 3.0 \
+            --split_normal_threshold 0.5 \
+            --lambda_normals 0 \
+            --outdoor
+
+        echo -e "\nFinished training $SCENE, rendering depth ranges.\n"
+
+        python render_depth_ranges.py -m $MODEL --iteration $ITERATIONS
+    done
+)
