@@ -26,6 +26,7 @@ def render_depth_ranges(model_path, name, iteration, views, triangles, pipeline,
         pkg = render(view, triangles, pipeline, background)
         depth_t05 = pkg["depth_transmittance_05"][0].detach().float().cpu().numpy()
         depth_t95 = pkg["depth_transmittance_95"][0].detach().float().cpu().numpy()
+        depth_median = pkg["render_depth_median"][0].detach().float().cpu().numpy()
         alpha = pkg["rend_alpha"][0].detach().float().cpu().numpy()
 
         npz_path = os.path.join(output_dir, f"{view.image_name}.npz")
@@ -33,6 +34,7 @@ def render_depth_ranges(model_path, name, iteration, views, triangles, pipeline,
             npz_path,
             depth_t05=depth_t05,
             depth_t95=depth_t95,
+            depth_median=depth_median,
             alpha=alpha,
         )
 

@@ -178,6 +178,7 @@ def render(viewpoint_camera, pc : TriangleModel, pipe, bg_color : torch.Tensor, 
             'surface_id': surface_id,
             'depth_transmittance_05': depth_transmittance_05,
             'depth_transmittance_95': depth_transmittance_95,
+            'render_depth_median': render_depth_median,
     })
 
     return rets
