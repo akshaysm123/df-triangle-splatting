@@ -115,7 +115,7 @@ class OptimizationParams(ParamGroup):
         self.lambda_normals = 0.05   # rendered-normal vs depth-normal self-consistency (2DGS value)
         self.lambda_depth = 1.0      # primary supervision, takes the role of the old RGB loss
         self.depth_log_l1_weight = 0.8      # absolute (log-space) anchor; primary depth term
-        self.depth_pearson_weight = 0.4     # scale/shift-invariant complementary regularizer
+        self.depth_pearson_weight = 0.2     # scale/shift-invariant complementary regularizer
         self.depth_pearson_patch_size = 16  # 32
         self.depth_min_alpha = 0.1   # exclude pixels with accumulated opacity below this from the depth loss
         self.lambda_dist = 50.0      # peak depth-distortion weight (annealed up to this, see below)
