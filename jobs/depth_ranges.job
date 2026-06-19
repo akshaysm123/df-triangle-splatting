@@ -23,7 +23,7 @@ conda activate triangle_splatting
     ITERATIONS=30000
     #  bicycle kitchen bonsai
     for SCENE in garden; do
-        MODEL=output/m360/$SCENE
+        MODEL=output/m360d/$SCENE
 
         python train.py -s $HOME/mipnerf/$SCENE -m $MODEL \
             --iterations $ITERATIONS \
