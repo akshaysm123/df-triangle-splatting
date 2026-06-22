@@ -33,7 +33,7 @@ class Scene:
 
     triangles : TriangleModel
 
-    def __init__(self, args : ModelParams, triangles : TriangleModel, init_opacity, init_size, nb_points, set_sigma, no_dome=False, load_iteration=None, shuffle=True, resolution_scales=[1.0]):
+    def __init__(self, args : ModelParams, triangles : TriangleModel, init_opacity, init_size, nb_points, set_sigma, no_dome=False, init_mode="depth", init_shapes=60000, load_iteration=None, shuffle=True, resolution_scales=[1.0]):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -95,7 +95,20 @@ class Scene:
                                                 )
                                     )
         else:
-            self.triangles.create_from_pcd(scene_info.point_cloud, self.cameras_extent, init_opacity, init_size, nb_points, set_sigma, no_dome)
+            use_depth_seeding = (
+                init_mode == "depth"
+                and any(getattr(c, "depth_map", None) is not None for c in self.getTrainCameras())
+            )
+            if use_depth_seeding:
+                self.triangles.create_from_depth_seeds(
+                    self.getTrainCameras(), self.cameras_extent, init_opacity,
+                    init_size, set_sigma, init_shapes,
+                )
+            else:
+                if init_mode == "depth":
+                    print("[ INFO ] init_mode='depth' but no depth maps available; "
+                          "falling back to SfM-point seeding.")
+                self.triangles.create_from_pcd(scene_info.point_cloud, self.cameras_extent, init_opacity, init_size, nb_points, set_sigma, no_dome)
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))

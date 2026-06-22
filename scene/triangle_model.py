@@ -121,6 +121,71 @@ def generate_triangles_in_chunks(x, y, z, radii, nb_points=3, chunk_size=2000):
     return out_points
 
 
+def triangles_from_oriented_points(centers, normals, radii):
+    """
+    Build one triangle per seed point, lying in the surface tangent plane.
+
+    Each triangle is equilateral with circumradius ``radii``, centred on
+    ``centers`` and oriented so its face normal matches ``normals`` (the local
+    surface orientation). This replaces the random-orientation seeding of
+    ``generate_triangles_in_chunks`` so depth-map seeds start as valid surface
+    patches instead of arbitrarily-tilted splats that the (weak, along-ray)
+    geometry gradient has to slowly correct.
+
+    Args:
+        centers: (N, 3) world-space triangle centres.
+        normals: (N, 3) world-space unit surface normals.
+        radii:   (N,) or (N, 1) circumradius per triangle.
+
+    Returns:
+        (N, 3, 3) triangle vertices.
+    """
+    device = centers.device
+    n = normals / (normals.norm(dim=1, keepdim=True) + 1e-9)
+
+    # Pick a reference axis that is not (near-)parallel to the normal so the
+    # cross product gives a well-conditioned in-plane basis.
+    ref = torch.zeros_like(n)
+    ref[:, 1] = 1.0
+    parallel = n[:, 1].abs() > 0.9
+    ref[parallel] = torch.tensor([1.0, 0.0, 0.0], device=device, dtype=n.dtype)
+
+    t1 = torch.cross(n, ref, dim=1)
+    t1 = t1 / (t1.norm(dim=1, keepdim=True) + 1e-9)
+    t2 = torch.cross(n, t1, dim=1)
+
+    r = radii.reshape(-1, 1)
+    verts = []
+    for k in range(3):
+        angle = math.pi / 2.0 + k * (2.0 * math.pi / 3.0)
+        offset = (math.cos(angle) * t1 + math.sin(angle) * t2) * r
+        verts.append(centers + offset)
+    return torch.stack(verts, dim=1)
+
+
+def voxel_mean_downsample(points, normals, voxel_size):
+    """
+    Collapse points to one representative per occupied voxel (mean position and
+    mean normal). Used to turn the union of per-view back-projected depth points
+    into a spatially-uniform seed set, decoupling seed density from the
+    texture-driven density of the source maps.
+    """
+    keys = torch.floor(points / voxel_size).to(torch.int64)
+    _, inv = torch.unique(keys, dim=0, return_inverse=True)
+    m = int(inv.max().item()) + 1 if inv.numel() > 0 else 0
+
+    pts_sum = torch.zeros(m, 3, device=points.device, dtype=points.dtype)
+    nrm_sum = torch.zeros(m, 3, device=points.device, dtype=normals.dtype)
+    cnt = torch.zeros(m, 1, device=points.device, dtype=points.dtype)
+    pts_sum.index_add_(0, inv, points)
+    nrm_sum.index_add_(0, inv, normals)
+    cnt.index_add_(0, inv, torch.ones((points.shape[0], 1), device=points.device, dtype=points.dtype))
+
+    pts_mean = pts_sum / cnt.clamp(min=1.0)
+    nrm_mean = nrm_sum / (nrm_sum.norm(dim=1, keepdim=True) + 1e-9)
+    return pts_mean, nrm_mean
+
+
 def densify_pcd_on_box(pcd: BasicPointCloud, num_new_points: int, scale_box: float = 1.0):
     """
     Densify the point cloud by sampling new points on all 6 faces of its (optionally scaled) bounding box.
@@ -479,6 +544,138 @@ class TriangleModel:
         self.normal_error = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
         self.normal_error_count = torch.zeros((fused_point_cloud.shape[0]), dtype=torch.float, device="cuda")
 
+    def create_from_depth_seeds(self, cameras, spatial_lr_scale, opacity, init_size,
+                                set_sigma, init_shapes, conf_thresh=0.0,
+                                max_intermediate=2_000_000):
+        """
+        Seed triangles by back-projecting the (DA3) depth maps that supervise the
+        model, instead of placing one randomly-oriented triangle per SfM point.
+
+        Motivation (see notes/error_aware_densification.md and the handoff): SfM
+        point density tracks photometric texture, not geometry, so it over-seeds
+        textured flats and under-seeds textureless/curved structure, and the
+        per-point triangles start randomly oriented. Seeding from the depth being
+        supervised gives a geometry-uniform, surface-oriented, locally-sized seed
+        set whose count is an explicit target (``init_shapes``) rather than
+        ``|SfM cloud|``.
+
+        Pipeline: per view, back-project valid depth pixels to world points and
+        world normals (same convention as the renderer's depth->normal), randomly
+        subsample to bound memory, fuse across views, voxel-mean downsample to
+        ~``init_shapes`` (equalising density), size each triangle from local
+        spacing, and lay it in the surface tangent plane.
+        """
+        from utils.point_utils import depths_to_points, depth_to_normal
+
+        self.spatial_lr_scale = spatial_lr_scale
+        self.nb_points = 3
+
+        valid_cams = [c for c in cameras if getattr(c, "depth_map", None) is not None]
+        assert len(valid_cams) > 0, "create_from_depth_seeds requires per-view depth maps"
+
+        # Bound the fused intermediate set so a few hundred high-res views do not
+        # OOM; each view contributes at most this many valid pixels.
+        per_view_cap = max(2000, int(max_intermediate // len(valid_cams)))
+
+        pts_list, nrm_list = [], []
+        with torch.no_grad():
+            for cam in valid_cams:
+                depth = cam.depth_map  # (1, H, W) camera-space z-depth (COLMAP-aligned)
+                world_pts = depths_to_points(cam, depth).reshape(-1, 3)
+                world_nrm = depth_to_normal(cam, depth).reshape(-1, 3)
+                d_flat = depth.reshape(-1)
+
+                valid = (
+                    torch.isfinite(world_pts).all(dim=1)
+                    & torch.isfinite(world_nrm).all(dim=1)
+                    & (d_flat > 1e-3)
+                    & (world_nrm.norm(dim=1) > 0.5)  # border / degenerate FD normals are ~0
+                )
+                if cam.confidence_map is not None:
+                    valid = valid & (cam.confidence_map.reshape(-1) > conf_thresh)
+
+                idx = valid.nonzero(as_tuple=True)[0]
+                if idx.numel() == 0:
+                    continue
+                if idx.numel() > per_view_cap:
+                    sel = torch.randperm(idx.numel(), device=idx.device)[:per_view_cap]
+                    idx = idx[sel]
+                pts_list.append(world_pts[idx])
+                nrm_list.append(world_nrm[idx] / (world_nrm[idx].norm(dim=1, keepdim=True) + 1e-9))
+
+        assert len(pts_list) > 0, "no valid depth pixels found for depth seeding"
+        points = torch.cat(pts_list, dim=0)
+        normals = torch.cat(nrm_list, dim=0)
+
+        # Voxel-mean downsample to ~init_shapes. Start fine and coarsen the voxel
+        # until the count drops to the target, so density is equalised by the
+        # grid (not by a texture-biased random trim); a final random trim only
+        # removes the small residual overshoot.
+        bbox = points.max(dim=0).values - points.min(dim=0).values
+        diag = float(torch.linalg.norm(bbox).item())
+        voxel = max(diag / 512.0, 1e-6)
+        ds_pts, ds_nrm = voxel_mean_downsample(points, normals, voxel)
+        for _ in range(24):
+            if ds_pts.shape[0] <= init_shapes * 1.1:
+                break
+            voxel *= 1.25
+            ds_pts, ds_nrm = voxel_mean_downsample(points, normals, voxel)
+        if ds_pts.shape[0] > init_shapes:
+            sel = torch.randperm(ds_pts.shape[0], device=ds_pts.device)[:init_shapes]
+            ds_pts, ds_nrm = ds_pts[sel], ds_nrm[sel]
+
+        ds_pts = ds_pts.contiguous().float()
+        ds_nrm = ds_nrm.contiguous().float()
+        number_of_points = ds_pts.shape[0]
+        print(f"Depth-seeding: {number_of_points} oriented triangles "
+              f"(target {init_shapes}, voxel {voxel:.4g}, from {len(valid_cams)} views)")
+
+        x_min, x_max = ds_pts[:, 0].min(), ds_pts[:, 0].max()
+        y_min, y_max = ds_pts[:, 1].min(), ds_pts[:, 1].max()
+        z_min, z_max = ds_pts[:, 2].min(), ds_pts[:, 2].max()
+        scene_size = max(x_max - x_min, y_max - y_min, z_max - z_min)
+        if scene_size > 300:
+            print("Scene is large, we increase the threshold")
+            self.large = True
+
+        dist2 = torch.clamp_min(distCUDA2(ds_pts), 0.0000001)
+        radii = init_size * torch.sqrt(dist2)
+        points_per_triangle = triangles_from_oriented_points(ds_pts, ds_nrm, radii)
+
+        # Colours are frozen in geometry-only training; seed a neutral grey.
+        fused_color = RGB2SH(torch.full((number_of_points, 3), 0.5, dtype=torch.float, device="cuda"))
+        features = torch.zeros((number_of_points, 3, (self.max_sh_degree + 1) ** 2), dtype=torch.float, device="cuda")
+        features[:, :3, 0] = fused_color
+
+        tensor_num_points_per_triangle = torch.full((number_of_points,), 3, dtype=torch.int, device="cuda")
+        cumsum_of_points_per_triangle = torch.cumsum(
+            torch.nn.functional.pad(tensor_num_points_per_triangle, (1, 0), value=0), 0, dtype=torch.int
+        )[:-1]
+
+        opacities = inverse_sigmoid(opacity * torch.ones((number_of_points, 1), dtype=torch.float, device="cuda"))
+        sigmas = self.inverse_exponential_activation(
+            torch.ones((number_of_points, 1), dtype=torch.float, device="cuda") * set_sigma
+        )
+
+        self._features_dc = nn.Parameter(features[:, :, 0:1].transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(features[:, :, 1:].transpose(1, 2).contiguous().requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self._triangles_points = nn.Parameter(points_per_triangle.to("cuda").requires_grad_(True))
+        self._sigma = nn.Parameter(sigmas.requires_grad_(True))
+        self._num_points_per_triangle = tensor_num_points_per_triangle
+        self._cumsum_of_points_per_triangle = cumsum_of_points_per_triangle
+        self._number_of_points = number_of_points
+        self.max_scaling = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
+        self.max_radii2D = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
+        self.max_density_factor = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
+        self._mask = nn.Parameter(torch.ones((number_of_points, 1), device="cuda").requires_grad_(True))
+        self.triangle_area = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
+        self.image_size = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
+        self.importance_score = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
+        self.depth_error = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
+        self.normal_error = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
+        self.normal_error_count = torch.zeros((number_of_points), dtype=torch.float, device="cuda")
+
     def training_setup(self, training_args, lr_mask, lr_features, lr_opacity, lr_sigma, lr_triangles_points_init):
 
         self.denom = torch.zeros((self.get_triangles_points.shape[0], 1), device="cuda")
@@ -497,6 +694,9 @@ class TriangleModel:
         # Normalized-normal-error threshold for error-gated splitting (0 = off,
         # i.e. route split-vs-clone purely by screen size as before).
         self.split_normal_threshold = training_args.split_normal_threshold
+        # Strength of need-gated growth (0 = constant add_shape; 1 = growth fully
+        # scaled by remaining interval error).
+        self.densify_need_gate = training_args.densify_need_gate
 
         l = [
             {'params': [self._features_dc], 'lr': lr_features, "name": "f_dc"},
@@ -745,17 +945,60 @@ class TriangleModel:
         self._cumsum_of_points_per_triangle = cumsum_of_points_per_triangle
         self._number_of_points = number_of_points
 
+    def _interval_need(self, eps):
+        """
+        A scalar in [0, 1] summarising how much depth/normal-supervision error
+        remains over the just-finished densification interval, used to taper
+        unconditional growth. 1 = the population is broadly mis-fit (grow at the
+        full rate); ~0 = geometry is largely converged (stop growing). Returns
+        None when neither error channel carries signal (both betas off), so the
+        caller falls back to constant growth.
+        """
+        per_tri = []
+        if torch.is_tensor(self.depth_error) and bool((self.depth_error > 0).any()):
+            e = self.depth_error
+            s = torch.quantile(e[e > 0], 0.99)
+            per_tri.append((e / (s + eps)).clamp(0.0, 1.0))
+        if torch.is_tensor(self.normal_error) and bool((self.normal_error > 0).any()):
+            cnt = self.normal_error_count.clamp(min=1.0)
+            nrm = self.normal_error / cnt
+            s = torch.quantile(nrm[nrm > 0], 0.99)
+            per_tri.append((nrm / (s + eps)).clamp(0.0, 1.0))
+        if not per_tri:
+            return None
+        # Per-triangle need = strongest of the two channels; interval need = its
+        # mean over the population (well-fit / untouched triangles read ~0 and
+        # pull growth down).
+        return float(torch.stack(per_tri, dim=0).amax(dim=0).mean().item())
+
     def add_new_gs(self, cap_max, oddGroup=True, dead_mask=None):
+        eps = torch.finfo(torch.float32).eps
         current_num_points = self._opacity.shape[0]
-        target_num = min(cap_max, int(self.add_shape * current_num_points))
+
+        # Need-gated growth: by default the population is refilled to
+        # add_shape * current every event regardless of fit quality, which (with
+        # aggressive pruning) just inflates the working set with short-lived
+        # triangles. With densify_need_gate > 0 the per-event growth increment is
+        # scaled toward the interval's remaining error, so converged intervals
+        # add little and the population plateaus near the surviving count instead
+        # of overshooting. densify_need_gate = 0 keeps the original constant rate;
+        # = 1 makes growth fully error-driven. Requires an error channel
+        # (densify_error_beta / densify_normal_beta > 0) to carry signal.
+        add_shape_eff = self.add_shape
+        gate = getattr(self, "densify_need_gate", 0.0)
+        if gate > 0.0:
+            need = self._interval_need(eps)
+            if need is not None:
+                factor = (1.0 - gate) + gate * need
+                add_shape_eff = 1.0 + (self.add_shape - 1.0) * factor
+
+        target_num = min(cap_max, int(add_shape_eff * current_num_points))
         num_gs = max(0, target_num - current_num_points)
 
         num_gs += dead_mask.sum()
 
         if num_gs <= 0:
             return 0
-
-        eps = torch.finfo(torch.float32).eps
 
         if oddGroup:
             probs = self.get_opacity.squeeze(-1) 

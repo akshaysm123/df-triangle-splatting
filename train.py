@@ -81,7 +81,7 @@ def training(
 
     # Load parameters, triangles and scene
     triangles = TriangleModel(dataset.sh_degree)
-    scene = Scene(dataset, triangles, opt.set_opacity, opt.triangle_size, opt.nb_points, opt.set_sigma, no_dome)
+    scene = Scene(dataset, triangles, opt.set_opacity, opt.triangle_size, opt.nb_points, opt.set_sigma, no_dome, init_mode=opt.init_mode, init_shapes=opt.init_shapes)
     triangles.training_setup(opt, opt.lr_mask, opt.feature_lr, opt.opacity_lr, opt.lr_sigma, opt.lr_triangles_points_init)
     
     if checkpoint:

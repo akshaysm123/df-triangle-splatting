@@ -109,6 +109,19 @@ class OptimizationParams(ParamGroup):
         self.set_opacity = 0.28
         self.set_sigma =  1.16
 
+        # Initial seeding. "sfm" = the original one-randomly-oriented-triangle per
+        # SfM point (count = |SfM cloud|). "depth" = back-project the DA3 depth
+        # maps that supervise the model into a geometry-uniform, surface-oriented
+        # seed set whose size is the explicit target init_shapes. SfM density
+        # tracks photometric texture rather than geometry, so it over-seeds
+        # textured flats and under-seeds textureless/curved structure; depth
+        # seeding removes that bias and starts triangles already on the surface.
+        self.init_mode = "depth"
+        # Target number of seed triangles for init_mode="depth". Kept below the
+        # post-densification survivor count (~200k on bicycle) so need-based
+        # densification fills in detail rather than starting saturated.
+        self.init_shapes = 60000
+
         self.noise_lr = 5e5
         self.mask_dead = 0.08
         # Geometry-only loss weights, see notes/geometry_only_hyperparameters.md
@@ -185,6 +198,18 @@ class OptimizationParams(ParamGroup):
         # sub-pixel triangles). Range (0, 1]; 0 keeps the pure screen-size rule.
         # Requires the normal channel to be populated (densify_normal_beta > 0).
         self.split_normal_threshold = 0.0
+
+        # Need-gated densification growth. By default the population is refilled
+        # to add_shape * current every densification event regardless of fit
+        # quality; with aggressive pruning this inflates the working set with
+        # short-lived triangles (e.g. 150k seed -> ~600k peak -> ~200k survivors).
+        # With this > 0, the per-event growth increment is scaled toward the
+        # interval's remaining depth/normal error, so converged intervals add
+        # little and the count plateaus near the surviving count instead of
+        # overshooting. 0 = original constant growth; 1 = fully error-driven.
+        # Requires densify_error_beta and/or densify_normal_beta > 0 to populate
+        # the error buffers (otherwise it falls back to constant growth).
+        self.densify_need_gate = 0.0
 
         self.p = 1.6
 
