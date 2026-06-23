@@ -32,6 +32,10 @@ conda activate triangle_splatting
     #                              error so the count plateaus near the survivor
     #                              level instead of overshooting (~600k churn peak).
     #                              Needs an error channel populated -> betas > 0.
+    #   --lambda_mask 0.01       : learnable-mask sparsity. L1 on the soft mask
+    #                              drives unneeded primitives off; masked-off ones
+    #                              are pruned. Principal lever for FEWER final
+    #                              primitives. Also unfreezes the mask lr.
     # The error-aware sampling / split routing (betas, split_normal_threshold) are
     # the prerequisites that populate the depth/normal error buffers.
     python train.py \
@@ -45,6 +49,7 @@ conda activate triangle_splatting
         --densify_error_beta 3.0 \
         --densify_normal_beta 3.0 \
         --split_normal_threshold 0.5 \
+        --lambda_mask 0.01 \
         --lambda_normals 0 \
         --outdoor
     # python render.py -m output/m360_seed_growth/$SCENE --quick

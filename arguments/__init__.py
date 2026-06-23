@@ -103,6 +103,17 @@ class OptimizationParams(ParamGroup):
         self.random_background = False
         self.mask_threshold = 0.01
         self.lr_mask = 0.01
+        # Learnable-mask sparsity for compression. The rasterizer already gates
+        # each primitive's opacity by a straight-through binary mask
+        # m = 1[sigmoid(_mask) > mask_threshold]; with lambda_mask > 0 an L1
+        # penalty lambda_mask * mean(sigmoid(_mask)) drives unneeded primitives'
+        # masks toward 0 (the depth/normal loss supplies the counter-gradient that
+        # keeps needed ones on), and masked-off primitives (sigmoid(_mask) <=
+        # mask_threshold) are pruned. This is the principal lever for forcing far
+        # fewer primitives. 0 = disabled (mask frozen at 1, original behavior);
+        # ~0.005-0.05 is a sensible starting range. Enabling it also unfreezes the
+        # mask learning rate (lr_mask), which is otherwise held at 0.
+        self.lambda_mask = 0.0
         
         self.nb_points = 3
         self.triangle_size = 2.23

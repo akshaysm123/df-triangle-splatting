@@ -283,10 +283,16 @@ def training(
         loss_size = 1 / equilateral_regularizer(triangles.get_triangles_points).mean() 
         loss_size = loss_size * opt.lambda_size
 
+        # Mask sparsity (compression): L1 on the soft mask drives unneeded
+        # primitives' masks toward 0; the depth/normal loss keeps needed ones on.
+        # Masked-off primitives are pruned in the densification block below.
+        # Zero (and free) when lambda_mask == 0.
+        loss_mask = opt.lambda_mask * torch.sigmoid(triangles._mask).mean() if opt.lambda_mask > 0 else 0.0
+
         if iteration < opt.densify_until_iter:
-            loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss + loss_size
+            loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss + loss_size + loss_mask
         else:
-            loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss
+            loss = loss_image + loss_opacity + depth_loss + normal_loss + dist_loss + loss_mask
 
         # A single non-finite batch would poison the parameters permanently;
         # skip the update instead.
@@ -366,7 +372,13 @@ def training(
                     if not outdoor:
                         mask_test = triangles.image_size > 1400
                         dead_mask = torch.logical_or(dead_mask, mask_test.squeeze())
-                          
+
+                # Mask-sparsity pruning: primitives whose learned mask has decayed
+                # below the binarization threshold contribute nothing to the render
+                # and are reclaimed.
+                if opt.lambda_mask > 0:
+                    mask_dead = (torch.sigmoid(triangles._mask).squeeze() <= opt.mask_threshold)
+                    dead_mask = torch.logical_or(dead_mask, mask_dead)
 
                 total_dead += dead_mask.sum()
 
@@ -401,6 +413,9 @@ def training(
                 if not new_round:
                     mask_test = triangles.triangle_area < 2
                     dead_mask = torch.logical_or(dead_mask, mask_test.squeeze())
+                if opt.lambda_mask > 0:
+                    mask_dead = (torch.sigmoid(triangles._mask).squeeze() <= opt.mask_threshold)
+                    dead_mask = torch.logical_or(dead_mask, mask_dead)
                 triangles.remove_final_points(dead_mask)
                 removed_them = True
                 new_round = False

@@ -704,7 +704,10 @@ class TriangleModel:
             {'params': [self._opacity], 'lr': lr_opacity, "name": "opacity"},
             {'params': [self._triangles_points], 'lr': lr_triangles_points_init, "name": "triangles_points"},
             {'params': [self._sigma], 'lr': lr_sigma, "name": "sigma"},
-            {'params': [self._mask], 'lr':  0, "name": "mask"}
+            # The mask is frozen (lr 0) unless mask-sparsity compression is on; the
+            # straight-through gate in the renderer only matters once lambda_mask
+            # pushes the underlying logits, so without it the mask must stay at 1.
+            {'params': [self._mask], 'lr':  (lr_mask if getattr(training_args, "lambda_mask", 0.0) > 0.0 else 0.0), "name": "mask"}
         ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
