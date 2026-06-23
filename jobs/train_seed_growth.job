@@ -20,7 +20,7 @@ conda activate triangle_splatting
     popd
     echo -e "\nFinished building, starting training.\n"
 
-    SCENE="bicycle"
+    SCENE="garden"
 
     # New additions (see notes/depth_seeding_and_growth.md):
     #   --init_mode depth        : seed triangles by back-projecting the DA3 depth
