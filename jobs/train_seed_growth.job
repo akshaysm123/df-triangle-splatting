@@ -45,7 +45,7 @@ conda activate triangle_splatting
         --depth_ratio 0.5 \
         --init_mode depth \
         --init_shapes 60000 \
-        --densify_need_gate 1.0 \
+        --densify_need_gate 0.0 \
         --densify_error_beta 3.0 \
         --densify_normal_beta 3.0 \
         --split_normal_threshold 0.5 \

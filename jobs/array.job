@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=18
 #SBATCH --time=01:00:00
 #SBATCH --output=output/DFTRI_output%A_%a.out
-#SBATCH --array=0-3
+#SBATCH --array=0-4
 
 set -e
 
@@ -17,18 +17,22 @@ conda activate triangle_splatting
 cd $HOME/df-triangle-splatting
 
 # Map array index -> scene
-SCENES=(garden bicycle kitchen bonsai)
+SCENES=(room counter kitchen garden)
 SCENE=${SCENES[$SLURM_ARRAY_TASK_ID]}
 
 echo "Training scene: $SCENE"
 
 python train.py \
     -s $HOME/mipnerf/$SCENE \
-    -m output/m360/$SCENE \
+    -m output/m360_seed_growth_array/${SCENE} \
     --iterations 30000 \
     --depth_ratio 0.5 \
+    --init_mode depth \
+    --init_shapes 60000 \
+    --densify_need_gate 0.0 \
     --densify_error_beta 3.0 \
     --densify_normal_beta 3.0 \
     --split_normal_threshold 0.5 \
+    --lambda_mask 0.005 \
     --lambda_normals 0 \
     --outdoor

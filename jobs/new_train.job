@@ -1,0 +1,41 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --job-name=dftri_train
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=18
+#SBATCH --time=01:00:00
+#SBATCH --output=output/DFTRI_output%A.out
+
+set -e
+source $HOME/miniconda3/start1260.sh
+conda activate triangle_splatting
+(
+    cd $HOME/df-triangle-splatting
+
+    # rebuild
+    pushd submodules/diff-triangle-rasterization/
+    pip install --no-build-isolation --upgrade .
+    popd
+    echo -e "\nFinished building, starting training.\n"
+
+    SCENE="garden"
+
+    python train.py \
+        -s $HOME/mipnerf/$SCENE \
+        -m output/m360_seed_growth_array/${SCENE} \
+        --iterations 30000 \
+        --depth_ratio 0.5 \
+        --init_mode depth \
+        --init_shapes 60000 \
+        --densify_need_gate 0.0 \
+        --densify_error_beta 3.0 \
+        --densify_normal_beta 3.0 \
+        --split_normal_threshold 0.5 \
+        --lambda_mask 0.005 \
+        --lambda_normals 0 \
+        --outdoor
+
+    # python render.py -m output/m360/$SCENE --quick
+)
