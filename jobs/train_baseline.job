@@ -1,0 +1,46 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --job-name=dftri_baseline
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=18
+#SBATCH --time=01:00:00
+#SBATCH --output=output/DFTRI_baseline_%A_%a.out
+#SBATCH --array=0-3
+
+set -e
+source $HOME/miniconda3/start1260.sh
+conda activate triangle_splatting
+
+cd $HOME/df-triangle-splatting
+
+# Baseline triangle splatting: original MCMC densification without the
+# error-aware boosting / need-gating / mask-sparsity / error-gated split
+# routing additions. Uses standard SfM seeding (one randomly-oriented
+# triangle per SfM point) and the original screen-size split-vs-clone rule.
+#
+# IMPORTANT — barycentrics must be turned OFF for this job: set
+#   DEPTH_BARYCENTRIC 0
+# in submodules/diff-triangle-rasterization/cuda_rasterizer/config.h
+# (constant per-triangle centroid depth, original forward/backward) and
+# rebuild the rasterizer once (e.g. jobs/rebuild.job) before submitting.
+# Modes 1/2 enable per-pixel barycentric depth and are not part of the
+# baseline rasterizer behavior this job is meant to match.
+
+SCENES=(room counter kitchen garden)
+SCENE=${SCENES[$SLURM_ARRAY_TASK_ID]}
+
+echo "Training scene: $SCENE"
+
+python train.py \
+    -s $HOME/mipnerf/$SCENE \
+    -m output/m360_baseline/${SCENE} \
+    --iterations 30000 \
+    --depth_ratio 0.5 \
+    --init_mode sfm \
+    --max_shapes 4000000 \
+    --lambda_normals 0 \
+    --outdoor
+
+# python render.py -m output/m360_baseline/$SCENE --quick

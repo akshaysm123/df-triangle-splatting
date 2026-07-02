@@ -27,6 +27,7 @@ conda activate triangle_splatting
         -m output/m360_seed_growth_array/${SCENE} \
         --iterations 30000 \
         --depth_ratio 0.5 \
+        --depth_error_mode reciprocal \
         --init_mode depth \
         --init_shapes 60000 \
         --densify_need_gate 0.0 \

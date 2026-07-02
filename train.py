@@ -29,6 +29,7 @@ from utils.loss_utils import (
     equilateral_regularizer,
     l2_loss,
     depth_combined_loss,
+    depth_pixel_error,
     normal_supervision_loss,
     camera_normals_to_world,
 )
@@ -209,6 +210,7 @@ def training(
                 patch_size=opt.depth_pearson_patch_size,
                 alpha=render_pkg["rend_alpha"].detach(),
                 min_alpha=opt.depth_min_alpha,
+                depth_error_mode=opt.depth_error_mode,
             )
 
         # Error-aware densification bookkeeping: attribute each pixel's depth
@@ -218,22 +220,23 @@ def training(
         # mirror the depth loss's valid-pixel masking (positive GT, alpha above
         # threshold) so densification chases genuinely badly-fit geometry.
         #
-        # The residual is the absolute LOG-ratio |log(pred) - log(gt)| rather than
-        # the raw |pred - gt|. Raw error scales with absolute depth, so it is
-        # dominated by distant geometry and re-introduces exactly the distance
-        # blow-up that a scale-invariant (e.g. Pearson-only) depth loss is meant
-        # to avoid; the log-ratio is distance-robust and bounded by min_depth.
+        # Per-pixel depth residual for densification; metric matches --depth_error_mode
+        # (log / reciprocal / raw), same as the absolute term in depth_combined_loss.
         if opt.densify_error_beta > 0.0 and depth_map is not None and iteration < opt.densify_until_iter:
             with torch.no_grad():
                 gt_depth_cuda = depth_map.cuda()
                 sid = render_pkg["surface_id"].reshape(-1)              # (H*W,) long, -1 = empty
                 gt_d = gt_depth_cuda.reshape(-1)
                 alpha_flat = render_pkg["rend_alpha"].detach().reshape(-1)
-                # min_depth bounds the log gradient/value; matches depth_combined_loss's default.
+                # min_depth bounds log/reciprocal gradient/value; matches depth_combined_loss.
                 min_depth = 1e-3
-                pred_d = surf_depth.detach().reshape(-1).clamp(min=min_depth)
-                gt_clamped = gt_d.clamp(min=min_depth)
-                per_pixel_err = (torch.log(pred_d) - torch.log(gt_clamped)).abs()
+                pred_d = surf_depth.detach().reshape(-1)
+                per_pixel_err = depth_pixel_error(
+                    pred_d,
+                    gt_d,
+                    mode=opt.depth_error_mode,
+                    min_depth=min_depth,
+                )
                 # NOTE: to down-weight unreliable pixels later, multiply
                 # per_pixel_err by confidence_map.reshape(-1) here.
                 valid = (sid >= 0) & (gt_d > 0) & (alpha_flat > opt.depth_min_alpha)

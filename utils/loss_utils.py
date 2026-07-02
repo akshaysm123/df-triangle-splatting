@@ -55,6 +55,28 @@ def log_l1_loss(network_output, gt, eps=1e-6, normalize=False):
     return torch.abs(torch.log(pred) - torch.log(target)).mean()
 
 
+DEPTH_ERROR_MODES = ("log", "reciprocal", "raw")
+
+
+def depth_pixel_error(pred, gt, mode="log", min_depth=1e-3):
+    """
+    Per-pixel absolute depth error in the chosen metric.
+    pred, gt: broadcastable tensors; clamped to min_depth before measuring.
+    mode: "log" -> |log(pred) - log(gt)|,
+          "reciprocal" -> |1/pred - 1/gt|,
+          "raw" -> |pred - gt|.
+    """
+    if mode not in DEPTH_ERROR_MODES:
+        raise ValueError(f"depth_error_mode must be one of {DEPTH_ERROR_MODES}, got {mode!r}")
+    pred_c = pred.clamp(min=min_depth)
+    gt_c = gt.clamp(min=min_depth)
+    if mode == "log":
+        return (torch.log(pred_c) - torch.log(gt_c)).abs()
+    if mode == "reciprocal":
+        return (1.0 / pred_c - 1.0 / gt_c).abs()
+    return (pred_c - gt_c).abs()
+
+
 def _pearson_loss_batched(pred, target, weight=None, eps=1e-8):
     """
     1 minus weighted Pearson r per row.
@@ -173,15 +195,17 @@ def depth_combined_loss(
     min_depth=1e-3,
     alpha=None,
     min_alpha=0.1,
+    depth_error_mode="log",
 ):
     """
-    Depth supervision: log_l1_weight * log-L1 + pearson_weight * patch Pearson.
+    Depth supervision: log_l1_weight * absolute depth error + pearson_weight * patch Pearson.
     pred, gt: (1, H, W) or (H, W). No confidence weighting.
 
+    depth_error_mode selects the absolute term: log, reciprocal (|1/p - 1/g|), or raw L1.
     alpha: optional (1, H, W) rendered accumulated opacity (pass it detached).
     Pixels with alpha <= min_alpha are excluded: expected depth there is D/alpha
     with alpha ~ 0, whose gradient (~1/alpha) explodes and NaNs the model.
-    min_depth also bounds the log-L1 gradient (d|log p|/dp = 1/p <= 1/min_depth).
+    min_depth also bounds the log/reciprocal gradient magnitude.
     """
     pred = _squeeze_hw(pred)
     gt = _squeeze_hw(gt)
@@ -194,12 +218,15 @@ def depth_combined_loss(
     )
     if alpha is not None:
         valid = valid & (_squeeze_hw(alpha) > min_alpha)
-    log_l1 = pred.new_zeros(())
+    abs_l1 = pred.new_zeros(())
     if valid.any():
-        log_err = torch.abs(
-            torch.log(pred.clamp(min=min_depth)) - torch.log(gt.clamp(min=min_depth))
+        err = depth_pixel_error(
+            pred,
+            gt,
+            mode=depth_error_mode,
+            min_depth=min_depth,
         )
-        log_l1 = log_err[valid].mean()
+        abs_l1 = err[valid].mean()
 
     pearson = pearson_correlation_loss_patches(
         pred,
@@ -208,7 +235,7 @@ def depth_combined_loss(
         patch_size=patch_size,
         min_depth=min_depth,
     )
-    return log_l1_weight * log_l1 + pearson_weight * pearson
+    return log_l1_weight * abs_l1 + pearson_weight * pearson
 
 
 def _squeeze_hw(t):
