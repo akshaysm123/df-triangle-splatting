@@ -76,6 +76,25 @@ def render_set(model_path, name, iteration, views, triangles, pipeline, backgrou
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
 
+def render_random_color_sharp(view, triangles, pipeline, background):
+    """Render the per-triangle random-color pass with maximum sharpness and opacity.
+
+    Temporarily overrides the model's raw parameters so that sigma hits the
+    activation floor (0.01 + exp(-20) ~= 0.01, i.e. a near-binary window
+    function with hard triangle edges) and opacity saturates (sigmoid(20) ~= 1),
+    giving flat, solid colors per triangle instead of soft alpha-blended ones.
+    """
+    orig_sigma = triangles._sigma
+    orig_opacity = triangles._opacity
+    try:
+        triangles._sigma = torch.full_like(orig_sigma, -20.0)
+        triangles._opacity = torch.full_like(orig_opacity, 20.0)
+        return render(view, triangles, pipeline, background)["rend_random_color"]
+    finally:
+        triangles._sigma = orig_sigma
+        triangles._opacity = orig_opacity
+
+
 def render_set_extended(model_path, name, iteration, views, triangles, pipeline, background, quick):
     """Render RGB, ground truth, depth colormap, normals, and per-triangle random-color views."""
     base = os.path.join(model_path, name, "ours_{}".format(iteration))
@@ -96,7 +115,8 @@ def render_set_extended(model_path, name, iteration, views, triangles, pipeline,
         rendering = pkg["render"]
         depth_vis = apply_depth_colormap(pkg["surf_depth"], pkg["rend_alpha"])
         normal_vis = apply_normal_vis(pkg["rend_normal"])
-        random_color = pkg["rend_random_color"]
+        #random_color = pkg["rend_random_color"]
+        random_color = render_random_color_sharp(view, triangles, pipeline, background)
         gt = view.original_image[0:3, :, :]
 
         stem = '{0:05d}'.format(idx) + ".png"
