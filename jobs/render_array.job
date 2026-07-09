@@ -1,0 +1,34 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --job-name=dftri_render
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=18
+#SBATCH --time=01:00:00
+#SBATCH --output=output/DFTRI_render%A_%a.out
+#SBATCH --array=0-3
+
+set -e
+
+source $HOME/miniconda3/start1260.sh
+conda activate triangle_splatting
+
+cd $HOME/df-triangle-splatting
+
+# Map array index -> scene (same as jobs/array.job)
+SCENES=(room counter kitchen garden)
+SCENE=${SCENES[$SLURM_ARRAY_TASK_ID]}
+
+MODEL=output/m360_seed_growth_array/${SCENE}
+ITERATIONS=30000
+
+echo "Rendering scene: $SCENE"
+echo "Model: $MODEL (iteration ${ITERATIONS})"
+echo "Outputs under train/ and test/ -> renders/, gt/, depth/, normals/, random_color/, random_color_soft/"
+
+python render.py \
+    -s $HOME/mipnerf/$SCENE \
+    -m $MODEL \
+    --iteration $ITERATIONS \
+    --quiet

@@ -96,15 +96,16 @@ def render_random_color_sharp(view, triangles, pipeline, background):
 
 
 def render_set_extended(model_path, name, iteration, views, triangles, pipeline, background, quick):
-    """Render RGB, ground truth, depth colormap, normals, and per-triangle random-color views."""
+    """Render RGB, ground truth, depth colormap, normals, and per-triangle random-color views (sharp and soft)."""
     base = os.path.join(model_path, name, "ours_{}".format(iteration))
     render_path = os.path.join(base, "renders")
     gts_path = os.path.join(base, "gt")
     depth_path = os.path.join(base, "depth")
     normal_path = os.path.join(base, "normals")
     random_color_path = os.path.join(base, "random_color")
+    random_color_soft_path = os.path.join(base, "random_color_soft")
 
-    for path in (render_path, gts_path, depth_path, normal_path, random_color_path):
+    for path in (render_path, gts_path, depth_path, normal_path, random_color_path, random_color_soft_path):
         makedirs(path, exist_ok=True)
 
     if quick:
@@ -115,8 +116,8 @@ def render_set_extended(model_path, name, iteration, views, triangles, pipeline,
         rendering = pkg["render"]
         depth_vis = apply_depth_colormap(pkg["surf_depth"], pkg["rend_alpha"])
         normal_vis = apply_normal_vis(pkg["rend_normal"])
-        #random_color = pkg["rend_random_color"]
-        random_color = render_random_color_sharp(view, triangles, pipeline, background)
+        random_color_soft = pkg["rend_random_color"]
+        random_color_sharp = render_random_color_sharp(view, triangles, pipeline, background)
         gt = view.original_image[0:3, :, :]
 
         stem = '{0:05d}'.format(idx) + ".png"
@@ -124,7 +125,8 @@ def render_set_extended(model_path, name, iteration, views, triangles, pipeline,
         torchvision.utils.save_image(gt, os.path.join(gts_path, stem))
         torchvision.utils.save_image(depth_vis, os.path.join(depth_path, stem))
         torchvision.utils.save_image(normal_vis, os.path.join(normal_path, stem))
-        torchvision.utils.save_image(random_color, os.path.join(random_color_path, stem))
+        torchvision.utils.save_image(random_color_sharp, os.path.join(random_color_path, stem))
+        torchvision.utils.save_image(random_color_soft, os.path.join(random_color_soft_path, stem))
 
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, quick : bool):
